@@ -21,7 +21,7 @@ function dateMinus(days) {
 }
 
 // Короткие подписи для чипов и заголовков (длинное название — в title)
-const LABELS = { USD: 'USD', USD_OTC: 'USD·OTC', EUR: 'EUR', CNY: 'CNY' }
+const LABELS = { USD: 'USD', USD_OTC: 'USD·OTC', EUR: 'EUR', EUR_OTC: 'EUR·OTC', CNY: 'CNY' }
 
 export default function App() {
   const [meta, setMeta] = useState([])              // справочник с сервера
@@ -84,9 +84,9 @@ export default function App() {
     return byCode
   }, [rates])
 
-  // --- Таблица: только дневные ряды ММВБ (иначе сутки OTC раздуют её в 100 раз) ---
+  // --- Таблица: только дневные ряды ММВБ (внутридневные OTC не имеют своей строки) ---
   const tableCodes = useMemo(
-    () => meta.filter((m) => m.code !== 'USD_OTC' && picked?.includes(m.code)).map((m) => m.code),
+    () => meta.filter((m) => !m.code.endsWith('_OTC') && picked?.includes(m.code)).map((m) => m.code),
     [meta, picked],
   )
   const byDate = useMemo(() => {

@@ -44,6 +44,13 @@ SOURCES = {
         "live": "https://query1.finance.yahoo.com/v8/finance/chart/RUB=X",
         "ticker": "RUB=X",
     },
+    "EUR_OTC": {
+        "provider": "yahoo",
+        "title": "Евро, межбанк OTC (Yahoo)",
+        # та же площадка, что в приложении «Акции» на iPhone (тикер EURRUB=X)
+        "live": "https://query1.finance.yahoo.com/v8/finance/chart/EURRUB=X",
+        "ticker": "EURRUB=X",
+    },
     "EUR": {
         "provider": "moex",
         "title": "Евро (фиксинг МОЭК)",
