@@ -1,0 +1,20 @@
+# moex-rates: мониторинг курсов USD/CNY с ММВБ
+# Запуск:  docker compose up -d --build
+# Порт на хосте 8080 — рядом с калькулятором (:80), порты не конфликтуют.
+
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - rates-data:/data          # история курсов переживёт пересборку
+    # наружу не публикуем: до API достанется только через nginx
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  rates-data:

@@ -1,0 +1,167 @@
+/* App.css — фильтры, график, таблица */
+
+.app {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.app h1 {
+  text-align: center;
+  font-weight: 600;
+}
+
+.hint {
+  text-align: center;
+  color: #77778b;
+  font-size: 0.9rem;
+  margin-top: -12px;
+}
+
+/* ---------- Фильтры ---------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin: 18px 0;
+}
+
+.filters label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: #9a9ab0;
+  font-size: 0.95rem;
+}
+
+.filters input[type="date"] {
+  background: #12121a;
+  border: 1px solid #33334a;
+  border-radius: 8px;
+  color: #f2f2f7;
+  padding: 6px 8px;
+  color-scheme: dark;      /* чтобы календарик был тёмным, а не белым */
+}
+
+.filters button {
+  background: #4c6ef5;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.filters button:hover {
+  background: #5f7ef7;
+}
+
+/* Чипы выбора валют */
+.currencies {
+  display: flex;
+  gap: 8px;
+}
+
+.chip {
+  border: 1px solid #33334a;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chip input {
+  display: none;
+}
+
+.chip-on {
+  border-color: #4c6ef5;
+  background: rgba(76, 110, 245, 0.15);
+  color: #cdd7ff;
+}
+
+/* ---------- График ---------- */
+
+.chart {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.chart svg {
+  width: 100%;
+  height: auto;
+}
+
+.legend {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  color: #9a9ab0;
+  font-size: 0.9rem;
+}
+
+.legend i {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.legend em {
+  font-style: normal;
+  color: #55556a;
+  margin-left: 4px;
+  font-size: 0.75rem;
+}
+
+/* ---------- Таблица ---------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1c1c28;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  padding: 9px 14px;
+  text-align: right;
+  border-bottom: 1px solid #26263a;
+}
+
+.table th {
+  color: #9a9ab0;
+  font-weight: 500;
+  background: #22222e;
+}
+
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+}
+
+.table tbody tr:hover {
+  background: #23233197;
+}
+
+/* ---------- Ошибки ---------- */
+
+.error {
+  background: #3c1f26;
+  color: #ff9b9b;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 12px 0;
+}

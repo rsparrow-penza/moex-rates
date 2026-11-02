@@ -1,0 +1,6 @@
+# Зависимости бэкенда moex-rates
+# Установка:  pip3 install -r requirements.txt
+flask
+flask-cors
+requests
+apscheduler

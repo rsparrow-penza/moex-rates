@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.db
+
+# Node.js
+node_modules/
+dist/
+
+# Логи и система
+*.log
+.DS_Store
