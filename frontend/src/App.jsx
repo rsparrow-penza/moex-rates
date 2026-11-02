@@ -1,8 +1,12 @@
-// App.jsx — курсы USD / EUR / CNY с ММВБ: диапазон дат + график + таблица.
+// App.jsx — курсы валют: ММВБ (фиксинги/спот) + внебиржевой USD (Yahoo OTC).
 //
-// Структура запроса: GET /api/rates?from=…&to=…&currencies=USD,EUR,CNY
-// Ответ — «длинный список» строк {currency, rate_date, rate};
-// для графика разворачиваем его в серии по валютам (useMemo, см. ниже).
+// Список валют теперь приходит от бэкенда (GET /api/currencies) —
+// чтобы добавить четвёртую валюту, достаточно изменить SOURCES в Python.
+//
+// Данные делятся на два"use":
+//   • таблица — дневные значения ММВБ (source=MOEX), строка = дата;
+//   • график — всё подряд, включая внутридневные точки Yahoo (15-минутки),
+//     поэтому USD на графике будет «змеей», а USD в таблице — точкой в день.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
@@ -16,17 +20,31 @@ function dateMinus(days) {
   return d.toISOString().slice(0, 10)
 }
 
-const ALL_CURRENCIES = ['USD', 'EUR', 'CNY']
+// Короткие подписи для чипов и заголовков (длинное название — в title)
+const LABELS = { USD: 'USD', USD_OTC: 'USD·OTC', EUR: 'EUR', CNY: 'CNY' }
 
 export default function App() {
+  const [meta, setMeta] = useState([])              // справочник с сервера
   const [from, setFrom] = useState(dateMinus(30))
   const [to, setTo] = useState(dateMinus(0))
-  const [picked, setPicked] = useState(ALL_CURRENCIES)   // выбранные валюты
+  const [picked, setPicked] = useState(null)        // null = все валюты
   const [rates, setRates] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // Справочник валют грузим один раз
+  useEffect(() => {
+    fetch('/api/currencies')
+      .then((r) => r.json())
+      .then((list) => {
+        setMeta(list)
+        setPicked(list.map((m) => m.code))
+      })
+      .catch(() => setError('Бэкенд недоступен. Запустите: python3 app.py'))
+  }, [])
+
   const load = useCallback(async () => {
+    if (!picked) return                 // справочник ещё не приехал
     setLoading(true)
     setError('')
     try {
@@ -35,19 +53,20 @@ export default function App() {
       if (!res.ok) throw new Error(`сервер ответил ${res.status}`)
       setRates(await res.json())
     } catch (e) {
-      setError(`Не удалось загрузить курсы: ${e.message}. Проверьте, запущен ли бэкенд.`)
+      setError(`Не удалось загрузить курсы: ${e.message}.`)
     } finally {
       setLoading(false)
     }
   }, [from, to, picked])
 
-  // Грузим сами и каждые 5 минут: планировщик на сервере дописывает
-  // строки, страница должна «жить» без перезагрузки.
+  // Грузим сами и каждые 5 минут: планировщик дописывает точки (OTC — каждые
+  // ~15 минут на стороне источника), страница должна «жить» без перезагрузки.
   useEffect(() => {
+    if (!picked) return
     load()
     const timer = setInterval(load, 5 * 60 * 1000)
     return () => clearInterval(timer)
-  }, [load])
+  }, [load, picked])
 
   function toggleCurrency(code) {
     setPicked((prev) => {
@@ -56,33 +75,37 @@ export default function App() {
     })
   }
 
-  // Сортировка по дате и разбивка на серии {USD: [...], EUR: [...], CNY: [...]}
-  const sorted = useMemo(
-    () => [...rates].sort((a, b) => a.rate_date.localeCompare(b.rate_date)),
-    [rates],
-  )
+  // --- График: все точки, серии по кодам, сортировка по дате+времени ---
   const series = useMemo(() => {
+    const sorted = [...rates].sort((a, b) =>
+      (a.rate_date + a.rate_time).localeCompare(b.rate_date + b.rate_time))
     const byCode = {}
     for (const r of sorted) (byCode[r.currency] ||= []).push(r)
     return byCode
-  }, [sorted])
+  }, [rates])
 
-  // Широкая таблица: одна строка = одна дата, колонки = валюты.
-  // Словарь строим один раз на рендер, а не ищем линейным перебором.
+  // --- Таблица: только дневные ряды ММВБ (иначе сутки OTC раздуют её в 100 раз) ---
+  const tableCodes = useMemo(
+    () => meta.filter((m) => m.code !== 'USD_OTC' && picked?.includes(m.code)).map((m) => m.code),
+    [meta, picked],
+  )
   const byDate = useMemo(() => {
     const map = new Map()
-    for (const r of sorted) {
+    for (const r of rates) {
+      if (r.source !== 'MOEX' || !tableCodes.includes(r.currency)) continue
       if (!map.has(r.rate_date)) map.set(r.rate_date, {})
       map.get(r.rate_date)[r.currency] = r.rate
     }
-    return [...map.entries()]                     // уже отсортировано по дате
-  }, [sorted])
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]))   // свежие наверху
+  }, [rates, tableCodes])
+
+  if (!meta.length) return <div className="app"><h1>Загрузка…</h1></div>
 
   return (
     <div className="app">
-      <h1>📊 Курсы валют ММВБ</h1>
-      <p className="hint">USD и EUR — биржевые фиксинги (обновляются раз в день после 13:00),
-        CNY — спот-торги (обновляются в течение торгового дня)</p>
+      <h1>📊 Курсы валют</h1>
+      <p className="hint">Фиксинги и спот — с ММВБ; USD·OTC — межбанковская котировка
+        Yahoo Finance, обновляется в течение всего дня</p>
 
       {/* Панель фильтров: диапазон дат и валюты */}
       <div className="filters">
@@ -93,10 +116,12 @@ export default function App() {
           по <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
         </label>
         <div className="currencies">
-          {ALL_CURRENCIES.map((code) => (
-            <label key={code} className={picked.includes(code) ? 'chip chip-on' : 'chip'}>
-              <input type="checkbox" checked={picked.includes(code)} onChange={() => toggleCurrency(code)} />
-              {code}
+          {meta.map(({ code, title }) => (
+            <label key={code} title={title}
+                   className={picked.includes(code) ? 'chip chip-on' : 'chip'}>
+              <input type="checkbox" checked={picked.includes(code)}
+                     onChange={() => toggleCurrency(code)} />
+              {LABELS[code] ?? code}
             </label>
           ))}
         </div>
@@ -105,22 +130,21 @@ export default function App() {
 
       {error && <div className="error">{error}</div>}
 
-      {sorted.length > 0 && <Chart series={series} />}
+      {Object.values(series).some((s) => s.length > 1) &&
+        <Chart series={series} labels={LABELS} />}
 
       <table className="table">
         <thead>
           <tr>
             <th>Дата</th>
-            {ALL_CURRENCIES.filter((c) => picked.includes(c)).map((c) => (
-              <th key={c}>{c}, ₽</th>
-            ))}
+            {tableCodes.map((c) => <th key={c}>{LABELS[c] ?? c}, ₽</th>)}
           </tr>
         </thead>
         <tbody>
           {byDate.map(([day, byCur]) => (
             <tr key={day}>
               <td>{day}</td>
-              {ALL_CURRENCIES.filter((c) => picked.includes(c)).map((c) => (
+              {tableCodes.map((c) => (
                 <td key={c}>{byCur[c] != null ? byCur[c].toFixed(2) : '—'}</td>
               ))}
             </tr>

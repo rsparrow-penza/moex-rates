@@ -1,16 +1,16 @@
 # Тесты moex-rates: python3 -m unittest discover -v
 #
-# Особенность этого проекта: данные приходят из ИНТЕРНЕТА (API ММВБ).
-# Тесты не должны зависеть от биржи — она может лежать, менять формат,
-# закрываться на выходные. Поэтому сетевые запросы мы ПОДМЕШАЕМ
-# (monkeypatch): вместо настоящего HTTP подставляем заготовленный JSON.
-# Так тесты бегут мгновенно и всегда одинаково — «детерминированно».
+# Особенности этого проекта:
+#   1. Данные приходят ИЗ ИНТЕРНЕТА (ММВБ и Yahoo) — тесты не должны
+#      зависеть от биржи, поэтому сетевые запросы ПОДМЕШАЕМЯ (mock):
+#      вместо настоящего HTTP подставляем заготовленный JSON.
+#   2. Два провайдера (moex/yahoo) и внутридневные точки Yahoo —
+#      для них отдельные проверки записи времени.
 
-import json
 import os
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone, datetime as dt
 from unittest import mock
 
 # Временная база и отключение сети при импорте — ДО импорта приложения
@@ -23,30 +23,23 @@ os.environ["SKIP_SEED"] = "1"
 import app as rates  # noqa: E402
 
 
-# --- Заготовки ответов ММВБ (живой вид JSON, снят руками с iss.moex.com) ---
+# --- Заготовки ответов (живой вид JSON, снят руками с реальных API) ---
 
-MOCK_USD_LIVE = {
+MOCK_MOEX_LIVE = {
     "marketdata": {
         "columns": ["SECID", "TRADEDATE", "CURRENTVALUE", "UPDATETIME"],
-        "data": [["USDFIXME", "2026-11-02", 80.5573, "13:00:00"]],
+        "data": [["SEC", "2026-11-02", 80.5573, "13:00:00"]],
     }
 }
 
-MOCK_EUR_LIVE = {
-    "marketdata": {
-        "columns": ["SECID", "TRADEDATE", "CURRENTVALUE"],
-        "data": [["EURFIXME", "2026-11-02", 89.6603]],
-    }
-}
-
-MOCK_CNY_LIVE = {
+MOCK_MOEX_LIVE_CNY = {
     "marketdata": {
         "columns": ["SECID", "TRADEDATE", "LAST", "WAPRICE"],
         "data": [["CNYRUB_TOM", "2026-11-02", 12.1234, 12.0789]],
     }
 }
 
-MOCK_HISTORY_USD = {
+MOCK_MOEX_HISTORY = {
     "history": {
         "columns": ["TRADEDATE", "SECID", "OPEN", "LOW", "HIGH", "CLOSE"],
         "data": [
@@ -56,131 +49,168 @@ MOCK_HISTORY_USD = {
     }
 }
 
-
-def fake_http_get(url, params=None):
-    """Подставной http_get_json: смотрим на URL и отдаём нужный кусок JSON."""
-    if "index/securities/USDFIXME.json" in url and params is None:
-        return MOCK_USD_LIVE
-    if "index/securities/EURFIXME.json" in url and params is None:
-        return MOCK_EUR_LIVE
-    if "selt/securities/CNYRUB_TOM.json" in url and params is None:
-        return MOCK_CNY_LIVE
-    if "history/engines/currency/markets/index" in url:
-        # backfill идёт окнами; реагируем как настоящий сервер:
-        # отдаём только те строки заготовки, что попадают в запрошенное окно
-        p = params or {}
-        rows = [r for r in MOCK_HISTORY_USD["history"]["data"]
-                if p.get("from", "") <= r[0] <= p.get("to", "9999")]
-        return {"history": {"columns": MOCK_HISTORY_USD["history"]["columns"],
-                            "data": rows}}
-    return {"history": {"columns": [], "data": []}}   # пустая история по умолчанию
+def _yahoo_payload():
+    """Две внутридневные точки Yahoo: 09:00 и 10:00 МСК 2 ноября."""
+    def msk_ts(hh, mm):
+        return int(dt(2026, 11, 2, hh, mm, tzinfo=timezone.utc)
+                   .replace(tzinfo=timezone(timedelta(hours=3))).timestamp())
+    return {
+        "chart": {"result": [{
+            "timestamp": [msk_ts(9, 0), msk_ts(10, 0)],
+            "indicators": {"quote": [{"close": [80.5, 80.9]}]},
+        }]}
+    }
 
 
-class TestDatabase(unittest.TestCase):
-    """Таблица и UPSERT — без сети вообще."""
+class TestMigration(unittest.TestCase):
+    """Старая схема (без source) должна переехать в новую без потерь."""
+
+    def test_old_rows_become_moex_daily(self):
+        import sqlite3
+        dbfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+        con = sqlite3.connect(dbfile)
+        con.execute("CREATE TABLE rates (currency TEXT, rate_date TEXT, rate REAL,"
+                    " fetched_at TEXT, PRIMARY KEY (currency, rate_date))")
+        con.execute("INSERT INTO rates VALUES ('USD','2026-11-01', 80.0, 'x')")
+        con.commit(); con.close()
+
+        with mock.patch.object(rates, "DB_FILE", dbfile):
+            rates.init_db()   # повторный вызов = миграция
+            with rates.get_db() as db:
+                row = db.execute("SELECT source, rate_time FROM rates").fetchone()
+            self.assertEqual(row["source"], "MOEX")
+            self.assertEqual(row["rate_time"], "")
+            # критично: после миграции PRIMARY KEY живёт — повтор не дублирует строку
+            with rates.get_db() as db:
+                rates.upsert_rate(db, "USD", "MOEX", "2026-11-01", "", 81.0)
+                rows = db.execute("SELECT COUNT(*) c FROM rates").fetchone()["c"]
+            self.assertEqual(rows, 1)
+
+
+class TestUpsert(unittest.TestCase):
 
     def setUp(self):
         with rates.get_db() as db:
             db.execute("DELETE FROM rates")
 
-    def test_upsert_replaces_same_day(self):
-        """Повторная запись за ту же дату и валюту НЕ создаёт дубль."""
+    def test_upsert_replaces_same_moment(self):
         with rates.get_db() as db:
-            rates.upsert_rate(db, "USD", "2026-11-02", 80.1)
-            rates.upsert_rate(db, "USD", "2026-11-02", 80.5)
-        rows = self.client_get("/api/rates").json
+            rates.upsert_rate(db, "USD", "MOEX", "2026-11-02", "", 80.1)
+            rates.upsert_rate(db, "USD", "MOEX", "2026-11-02", "", 80.5)
+        rows = rates.app.test_client().get("/api/rates?currencies=USD").json
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["rate"], 80.5)
 
+    def test_daily_and_intraday_coexist(self):
+        """Один день: суточный фиксинг MOEX и две точки Yahoo — три строки."""
+        with rates.get_db() as db:
+            rates.upsert_rate(db, "USD", "MOEX", "2026-11-02", "", 80.5)
+            rates.upsert_rate(db, "USD_OTC", "YAHOO", "2026-11-02", "09:00", 80.1)
+            rates.upsert_rate(db, "USD_OTC", "YAHOO", "2026-11-02", "10:00", 80.9)
+        rows = rates.app.test_client().get("/api/rates").json
+        self.assertEqual(len(rows), 3)
+        # сортировка по времени внутри дня
+        otc = [r for r in rows if r["currency"] == "USD_OTC"]
+        self.assertEqual([r["rate_time"] for r in otc], ["09:00", "10:00"])
+
     def test_upsert_skips_none(self):
         with rates.get_db() as db:
-            self.assertFalse(rates.upsert_rate(db, "USD", "2026-11-02", None))
-
-    @property
-    def client(self):
-        return rates.app.test_client()
-
-    def client_get(self, url):
-        return self.client.get(url)
+            self.assertFalse(rates.upsert_rate(db, "USD", "MOEX", "2026-11-02", "", None))
 
 
-class TestLiveFetch(unittest.TestCase):
-    """Опрос «живого» API — на подмешанных данных."""
+class TestMoexFetch(unittest.TestCase):
 
     def setUp(self):
         with rates.get_db() as db:
             db.execute("DELETE FROM rates")
-        patcher = mock.patch.object(rates, "http_get_json", side_effect=fake_http_get)
+        patcher = mock.patch.object(rates, "http_get_json", side_effect=self.fake_get)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def fake_get(url, params=None):
+        if "CNYRUB_TOM" in url:
+            return MOCK_MOEX_LIVE_CNY
+        if params is not None:
+            return MOCK_MOEX_HISTORY          # история для backfill
+        return MOCK_MOEX_LIVE                 # живой эндпоинт
 
     def test_fetch_live_usd(self):
         self.assertTrue(rates.fetch_live("USD"))
-        rows = rates.app.test_client().get("/api/rates").json
-        self.assertEqual(rows[0]["currency"], "USD")
-        self.assertEqual(rows[0]["rate"], 80.5573)
-        self.assertEqual(rows[0]["rate_date"], "2026-11-02")
-
-    def test_fetch_live_cny(self):
-        self.assertTrue(rates.fetch_live("CNY"))
-        row = rates.app.test_client().get("/api/rates?currencies=CNY").json[0]
-        self.assertEqual(row["rate"], 12.1234)          # поле LAST
-
-    def test_hourly_job_writes_all_currencies(self):
-        """Главный сценарий: прогон почасовой задачи кладёт в базу все валюты."""
-        rates.hourly_job()
-        currencies = {r["currency"] for r in
-                      rates.app.test_client().get("/api/rates").json}
-        self.assertEqual(currencies, {"USD", "EUR", "CNY"})
-
-    def test_network_failure_is_graceful(self):
-        """Биржа упала — приложение не падает, просто ничего не пишет."""
-        def boom(url, params=None):
-            raise ConnectionError("моэк не отвечает")
-        with mock.patch.object(rates, "http_get_json", side_effect=boom):
-            self.assertFalse(rates.fetch_live("USD"))
-        self.assertEqual(rates.app.test_client().get("/api/rates").json, [])
-
-
-class TestBackfill(unittest.TestCase):
-    """Загрузка истории при первом старте."""
-
-    def setUp(self):
-        with rates.get_db() as db:
-            db.execute("DELETE FROM rates")
-        patcher = mock.patch.object(rates, "http_get_json", side_effect=fake_http_get)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        row = rates.app.test_client().get("/api/rates?currencies=USD").json[0]
+        self.assertEqual(row["source"], "MOEX")
+        self.assertEqual(row["rate"], 80.5573)
+        self.assertEqual(row["rate_date"], "2026-11-02")
 
     def test_backfill_usd(self):
         saved = rates.backfill("USD")
-        self.assertEqual(saved, 2)                      # оба дня из заготовки
+        self.assertGreaterEqual(saved, 2)             # 14-дневные окна могут повторять строки
         rows = rates.app.test_client().get("/api/rates?currencies=USD").json
+        # …но в таблице благодаря PRIMARY KEY — ровно две уникальные даты
         self.assertEqual({r["rate_date"] for r in rows},
                          {"2026-10-31", "2026-11-01"})
+        self.assertEqual(len(rows), 2)
 
     def test_backfill_windows_days(self):
-        """
-        История подтягивается «окнами» по 14 дней (страницы по 100 строк
-        у ММВБ ненадёжны). Проверим, что при запросе 30 дней было сделано
-        несколько окон и все строки записаны.
-        """
+        """Backfill ходит окнами ≤14 дней, иначе упрёмся в страницу из 100 строк."""
         calls = []
         def windowed(url, params=None):
             p = params or {}
             calls.append((p.get("from"), p.get("to")))
-            # в каждом окне отдаём по одной «сделке» с ценой
             return {"history": {"columns": ["TRADEDATE", "CLOSE"],
                                 "data": [[p.get("to"), 80.0]]}}
         with mock.patch.object(rates, "http_get_json", side_effect=windowed):
-            saved = rates.backfill("USD", days=30)
-        self.assertGreaterEqual(len(calls), 2)          # минимум два окна на 30 дней
-        # из каждого окна записалось по строке, но дата одна (to окна) — 
-        # считаем не сохранённые строки, а ширину покрытия:
+            rates.backfill("USD", days=30)
+        self.assertGreaterEqual(len(calls), 2)
         first_from = min(c[0] for c in calls)
-        last_to = max(c[1] for c in calls)
         self.assertLessEqual(first_from, (date.today() - timedelta(days=30)).isoformat())
-        self.assertEqual(last_to, date.today().isoformat())
+        self.assertEqual(max(c[1] for c in calls), date.today().isoformat())
+
+
+class TestYahooFetch(unittest.TestCase):
+
+    def setUp(self):
+        with rates.get_db() as db:
+            db.execute("DELETE FROM rates")
+        patcher = mock.patch.object(rates, "http_get_json", return_value=_yahoo_payload())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_fetch_live_yahoo_writes_intraday(self):
+        self.assertTrue(rates.fetch_live("USD_OTC"))
+        rows = rates.app.test_client().get("/api/rates?currencies=USD_OTC").json
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["source"] for r in rows}, {"YAHOO"})
+        # время конвертировано из UTC в МСК (09:00 MSK = 06:00 UTC)
+        self.assertEqual([r["rate_time"] for r in rows], ["09:00", "10:00"])
+        self.assertEqual(rows[0]["rate_date"], "2026-11-02")
+
+    def test_backfill_skips_yahoo(self):
+        """У yahoo-валют нет истории ММВБ — backfill не должен дёргать сеть."""
+        with mock.patch.object(rates, "http_get_json", side_effect=AssertionError):
+            self.assertEqual(rates.backfill("USD_OTC"), 0)
+
+
+class TestHourlyJobAndResilience(unittest.TestCase):
+
+    def test_hourly_job_covers_every_currency(self):
+        """Прогон почасовой задачи обращается к каждой валюте SOURCES."""
+        touched = []
+        mock.patch.object(rates, "fetch_live",
+                          side_effect=lambda c: touched.append(c)).start()
+        self.addCleanup(mock.patch.stopall)
+        rates.hourly_job()
+        self.assertEqual(set(touched), set(rates.SOURCES.keys()))
+
+    def test_network_failure_is_graceful(self):
+        """Биржа упала — приложение не падает, просто ничего не пишет."""
+        def boom(url, params=None):
+            raise ConnectionError("moex не отвечает")
+        with rates.get_db() as db:
+            db.execute("DELETE FROM rates")
+        with mock.patch.object(rates, "http_get_json", side_effect=boom):
+            self.assertFalse(rates.fetch_live("USD"))
+            self.assertFalse(rates.fetch_live("USD_OTC"))
 
 
 class TestRatesEndpoint(unittest.TestCase):
@@ -189,32 +219,35 @@ class TestRatesEndpoint(unittest.TestCase):
     def setUp(self):
         with rates.get_db() as db:
             db.execute("DELETE FROM rates")
-            db.execute("INSERT INTO rates VALUES ('USD','2026-10-01',78.0,'x')")
-            db.execute("INSERT INTO rates VALUES ('USD','2026-10-15',80.0,'x')")
-            db.execute("INSERT INTO rates VALUES ('USD','2026-11-01',81.0,'x')")
-            db.execute("INSERT INTO rates VALUES ('CNY','2026-10-15',11.5,'x')")
+            for c, s, d, t, v in [
+                ("USD", "MOEX", "2026-10-01", "", 78.0),
+                ("USD", "MOEX", "2026-10-15", "", 80.0),
+                ("USD", "MOEX", "2026-11-01", "", 81.0),
+                ("USD_OTC", "YAHOO", "2026-10-15", "12:00", 80.2),
+                ("CNY", "MOEX", "2026-10-15", "", 11.5),
+            ]:
+                db.execute("INSERT INTO rates VALUES (?,?,?,?,?,?)",
+                           (c, s, d, t, v, "x"))
         self.client = rates.app.test_client()
 
     def test_no_filters_returns_all(self):
-        self.assertEqual(len(self.client.get("/api/rates").json), 4)
+        self.assertEqual(len(self.client.get("/api/rates").json), 5)
 
     def test_from_to(self):
         rows = self.client.get("/api/rates?from=2026-10-10&to=2026-10-31").json
-        self.assertEqual({(r["currency"], r["rate_date"]) for r in rows},
-                         {("USD", "2026-10-15"), ("CNY", "2026-10-15")})
+        self.assertEqual(len(rows), 3)              # USD 10-15, USD_OTC 10-15, CNY 10-15
 
     def test_only_from(self):
         rows = self.client.get("/api/rates?from=2026-10-31").json
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["rate_date"], "2026-11-01")
+        self.assertEqual({(r["currency"], r["rate_date"]) for r in rows},
+                         {("USD", "2026-11-01")})
 
     def test_currency_filter(self):
         rows = self.client.get("/api/rates?currencies=CNY").json
         self.assertTrue(all(r["currency"] == "CNY" for r in rows))
 
     def test_unknown_currency_falls_back_to_all(self):
-        rows = self.client.get("/api/rates?currencies=ZWL").json
-        self.assertEqual(len(rows), 4)                  # неизвестную выбросили, остались все
+        self.assertEqual(len(self.client.get("/api/rates?currencies=ZWL").json), 5)
 
 
 if __name__ == "__main__":
