@@ -124,6 +124,12 @@
   font-size: 0.75rem;
 }
 
+.legend-note {
+  color: #55556a;
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
 /* ---------- Таблица ---------- */
 
 .table {

@@ -32,6 +32,14 @@ SOURCES = {
         "history": "https://iss.moex.com/iss/history/engines/currency/markets/index/securities/USDFIXME.json",
         "history_value_key": "CLOSE",       # поле с курсом в истории (для backfill)
     },
+    "EUR": {
+        "title": "Евро (фиксинг МОЭК)",
+        # как и доллар: спот-торги евро приостановлены, биржа публикует фиксинг
+        "live": "https://iss.moex.com/iss/engines/currency/markets/index/securities/EURFIXME.json",
+        "live_value_key": "CURRENTVALUE",
+        "history": "https://iss.moex.com/iss/history/engines/currency/markets/index/securities/EURFIXME.json",
+        "history_value_key": "CLOSE",
+    },
     "CNY": {
         "title": "Китайский юань (спот-торги МОЭК)",
         # основной «народный» инструмент: юань/рубль, секция CETS, торги
@@ -118,15 +126,17 @@ def fetch_live(currency: str) -> bool:
         if not rows:
             print(f"[{currency}] живой эндпоинт вернул пустоту (нет торгов?)")
             return False
-        row = dict(zip(cols, rows[0]))
-        value = row.get(source["live_value_key"]) or row.get("WAPRICE")
+        # Отвечает несколько строк (по торговым секциям); берём первую с ценой.
         # Дату берём из отчёта биржи (TRADEDATE), а не из часов сервера:
         # ночью биржа отдаёт вчерашнюю сделку — и это правильно.
-        rate_date = row.get("TRADEDATE") or date.today().isoformat()
-        if value is None:
-            return False
-        with get_db() as db:
-            return upsert_rate(db, currency, rate_date, value)
+        for raw in rows:
+            row = dict(zip(cols, raw))
+            value = row.get(source["live_value_key"]) or row.get("WAPRICE")
+            if value is not None:
+                rate_date = row.get("TRADEDATE") or date.today().isoformat()
+                with get_db() as db:
+                    return upsert_rate(db, currency, rate_date, value)
+        return False
     except Exception as e:                       # сеть, JSON, структура поплыли…
         print(f"[{currency}] ошибка живого опроса: {e}")
         return False

@@ -1,22 +1,22 @@
-// App.jsx — курсы USD и CNY с ММВБ: выбор диапазона дат + таблица + график.
+// App.jsx — курсы USD / EUR / CNY с ММВБ: диапазон дат + график + таблица.
 //
-// Структура запроса: GET /api/rates?from=…&to=…&currencies=USD,CNY
+// Структура запроса: GET /api/rates?from=…&to=…&currencies=USD,EUR,CNY
 // Ответ — «длинный список» строк {currency, rate_date, rate};
-// для графика мы разворачиваем его в две серии по датам.
+// для графика разворачиваем его в серии по валютам (useMemo, см. ниже).
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
 import './App.css'
 
-// Дефолтный диапазон: последний месяц — смотрим через toISOString,
-// чтобы формат даты был YYYY-MM-DD независимо от локали браузера.
+// Дефолтный диапазон: последний месяц — через toISOString,
+// чтобы формат был YYYY-MM-DD независимо от локали браузера.
 function dateMinus(days) {
   const d = new Date()
   d.setDate(d.getDate() - days)
   return d.toISOString().slice(0, 10)
 }
 
-const ALL_CURRENCIES = ['USD', 'CNY']
+const ALL_CURRENCIES = ['USD', 'EUR', 'CNY']
 
 export default function App() {
   const [from, setFrom] = useState(dateMinus(30))
@@ -41,8 +41,8 @@ export default function App() {
     }
   }, [from, to, picked])
 
-  // Грузим данные сами и каждые 5 минут — планировщик на сервере
-  // дописывает строки, и таблица должна «жить» без перезагрузки страницы.
+  // Грузим сами и каждые 5 минут: планировщик на сервере дописывает
+  // строки, страница должна «жить» без перезагрузки.
   useEffect(() => {
     load()
     const timer = setInterval(load, 5 * 60 * 1000)
@@ -56,8 +56,7 @@ export default function App() {
     })
   }
 
-  // Две серии для графика и таблицы: сначала сортируем список по дате,
-  // useMemo — чтобы не пересортировывать лишний раз на каждый чих стейта.
+  // Сортировка по дате и разбивка на серии {USD: [...], EUR: [...], CNY: [...]}
   const sorted = useMemo(
     () => [...rates].sort((a, b) => a.rate_date.localeCompare(b.rate_date)),
     [rates],
@@ -68,10 +67,21 @@ export default function App() {
     return byCode
   }, [sorted])
 
+  // Широкая таблица: одна строка = одна дата, колонки = валюты.
+  // Словарь строим один раз на рендер, а не ищем линейным перебором.
+  const byDate = useMemo(() => {
+    const map = new Map()
+    for (const r of sorted) {
+      if (!map.has(r.rate_date)) map.set(r.rate_date, {})
+      map.get(r.rate_date)[r.currency] = r.rate
+    }
+    return [...map.entries()]                     // уже отсортировано по дате
+  }, [sorted])
+
   return (
     <div className="app">
       <h1>📊 Курсы валют ММВБ</h1>
-      <p className="hint">USD — биржевой фиксинг (обновляется раз в день после 13:00),
+      <p className="hint">USD и EUR — биржевые фиксинги (обновляются раз в день после 13:00),
         CNY — спот-торги (обновляются в течение торгового дня)</p>
 
       {/* Панель фильтров: диапазон дат и валюты */}
@@ -99,21 +109,22 @@ export default function App() {
 
       <table className="table">
         <thead>
-          <tr><th>Дата</th><th>USD, ₽</th><th>CNY, ₽</th></tr>
+          <tr>
+            <th>Дата</th>
+            {ALL_CURRENCIES.filter((c) => picked.includes(c)).map((c) => (
+              <th key={c}>{c}, ₽</th>
+            ))}
+          </tr>
         </thead>
         <tbody>
-          {/* Разворачиваем длинный список в широкую таблицу: строка = дата */}
-          {Array.from(new Set(sorted.map((r) => r.rate_date))).map((day) => {
-            const usd = series.USD?.find((r) => r.rate_date === day)
-            const cny = series.CNY?.find((r) => r.rate_date === day)
-            return (
-              <tr key={day}>
-                <td>{day}</td>
-                <td>{usd ? usd.rate.toFixed(2) : '—'}</td>
-                <td>{cny ? cny.rate.toFixed(2) : '—'}</td>
-              </tr>
-            )
-          })}
+          {byDate.map(([day, byCur]) => (
+            <tr key={day}>
+              <td>{day}</td>
+              {ALL_CURRENCIES.filter((c) => picked.includes(c)).map((c) => (
+                <td key={c}>{byCur[c] != null ? byCur[c].toFixed(2) : '—'}</td>
+              ))}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

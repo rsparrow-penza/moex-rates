@@ -32,6 +32,13 @@ MOCK_USD_LIVE = {
     }
 }
 
+MOCK_EUR_LIVE = {
+    "marketdata": {
+        "columns": ["SECID", "TRADEDATE", "CURRENTVALUE"],
+        "data": [["EURFIXME", "2026-11-02", 89.6603]],
+    }
+}
+
 MOCK_CNY_LIVE = {
     "marketdata": {
         "columns": ["SECID", "TRADEDATE", "LAST", "WAPRICE"],
@@ -54,6 +61,8 @@ def fake_http_get(url, params=None):
     """Подставной http_get_json: смотрим на URL и отдаём нужный кусок JSON."""
     if "index/securities/USDFIXME.json" in url and params is None:
         return MOCK_USD_LIVE
+    if "index/securities/EURFIXME.json" in url and params is None:
+        return MOCK_EUR_LIVE
     if "selt/securities/CNYRUB_TOM.json" in url and params is None:
         return MOCK_CNY_LIVE
     if "history/engines/currency/markets/index" in url:
@@ -117,12 +126,12 @@ class TestLiveFetch(unittest.TestCase):
         row = rates.app.test_client().get("/api/rates?currencies=CNY").json[0]
         self.assertEqual(row["rate"], 12.1234)          # поле LAST
 
-    def test_hourly_job_writes_both(self):
-        """Главный сценарий: прогон почасовой задачи кладёт в базу обе валюты."""
+    def test_hourly_job_writes_all_currencies(self):
+        """Главный сценарий: прогон почасовой задачи кладёт в базу все валюты."""
         rates.hourly_job()
         currencies = {r["currency"] for r in
                       rates.app.test_client().get("/api/rates").json}
-        self.assertEqual(currencies, {"USD", "CNY"})
+        self.assertEqual(currencies, {"USD", "EUR", "CNY"})
 
     def test_network_failure_is_graceful(self):
         """Биржа упала — приложение не падает, просто ничего не пишет."""
