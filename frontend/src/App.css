@@ -109,6 +109,82 @@
   color: #fff !important;
 }
 
+/* Мировые часы: четыре циферблата в ряд, на узких экранах — 2×2 */
+.clocks {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 640px) {
+  .clocks { grid-template-columns: repeat(2, 1fr); }
+}
+
+.clock {
+  margin: 0;
+  text-align: center;
+}
+
+.clock svg {
+  width: 100%;
+  max-width: 150px;
+  height: auto;
+}
+
+.clock-rim {
+  fill: none;
+  stroke: #33334a;
+  stroke-width: 1.5;
+}
+
+.clock-face {
+  fill: #12121a;
+}
+
+.clock-tick {
+  stroke: #3a3a4d;
+  stroke-width: 0.8;
+}
+
+.clock-tick-major {
+  stroke: #6f6f8a;
+  stroke-width: 1.6;
+}
+
+.clock-numeral {
+  font-size: 9px;
+  fill: #9a9ab0;
+}
+
+.clock figcaption {
+  margin-top: 6px;
+}
+
+.clock-city {
+  font-weight: 600;
+  color: #f2f2f7;
+  font-size: 0.95rem;
+}
+
+.clock-digital {
+  font-variant-numeric: tabular-nums;   /* цифры моноширинные — секунды не «прыгают» */
+  color: #8fd3c7;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  align-items: baseline;
+}
+
+.clock-offset {
+  color: #55556a;
+  font-size: 0.72rem;
+}
+
 /* ---------- График ---------- */
 
 .chart {
