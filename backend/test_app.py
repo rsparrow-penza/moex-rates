@@ -193,14 +193,18 @@ class TestYahooFetch(unittest.TestCase):
 
 class TestHourlyJobAndResilience(unittest.TestCase):
 
-    def test_hourly_job_covers_every_currency(self):
-        """Прогон почасовой задачи обращается к каждой валюте SOURCES."""
+    def test_hourly_job_covers_every_group(self):
+        """Прогон почасовой задачи обращается к каждой группе источников ровно раз."""
         touched = []
         mock.patch.object(rates, "fetch_live",
                           side_effect=lambda c: touched.append(c)).start()
         self.addCleanup(mock.patch.stopall)
         rates.hourly_job()
-        self.assertEqual(set(touched), set(rates.SOURCES.keys()))
+        # aliased-валюты (EUR_CBR, CNY_CBR) обслуживаются запросом USD_CBR
+        expected = {c for c, s in rates.SOURCES.items() if "alias_of" not in s}
+        self.assertEqual(set(touched), expected)
+        for c in touched:
+            self.assertEqual(touched.count(c), 1)      # без повторов
 
     def test_network_failure_is_graceful(self):
         """Биржа упала — приложение не падает, просто ничего не пишет."""
@@ -211,6 +215,46 @@ class TestHourlyJobAndResilience(unittest.TestCase):
         with mock.patch.object(rates, "http_get_json", side_effect=boom):
             self.assertFalse(rates.fetch_live("USD"))
             self.assertFalse(rates.fetch_live("USD_OTC"))
+
+
+class TestCbr(unittest.TestCase):
+    """Официальный ЦБ: один XML на все валюты, windows-1251, запятая в числе."""
+
+    XML_MOCK = (
+        '<?xml version="1.0" encoding="windows-1251"?>'
+        '<ValCurs Date="02.11.2026" name="Foreign Currency Market">'
+        '<Valute ID="R01235"><CharCode>USD</CharCode><Nominal>1</Nominal>'
+        '<VunitRate>80,5573</VunitRate></Valute>'
+        '<Valute ID="R01239"><CharCode>EUR</CharCode><Nominal>1</Nominal>'
+        '<VunitRate>90,6603</VunitRate></Valute>'
+        '<Valute ID="R01375"><CharCode>CNY</CharCode><Nominal>1</Nominal>'
+        '<VunitRate>12,0873</VunitRate></Valute>'
+        '</ValCurs>'
+    )
+
+    def setUp(self):
+        with rates.get_db() as db:
+            db.execute("DELETE FROM rates")
+        patcher = mock.patch.object(rates, "http_get_xml_text", return_value=self.XML_MOCK)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_one_request_writes_three_currencies(self):
+        saved = rates.fetch_cbr_day(date(2026, 11, 2))
+        self.assertEqual(saved, 3)
+        rows = rates.app.test_client().get("/api/rates").json
+        self.assertEqual({r["currency"] for r in rows},
+                         {"USD_CBR", "EUR_CBR", "CNY_CBR"})
+        self.assertTrue(all(r["source"] == "CBR" for r in rows))
+        usd = [r for r in rows if r["currency"] == "USD_CBR"][0]
+        self.assertAlmostEqual(usd["rate"], 80.5573)      # запятая съедена
+        self.assertEqual(usd["rate_date"], "2026-11-02")  # ISO из «02.11.2026»
+
+    def test_backfill_alias_skips_network(self):
+        """EUR_CBR не должен дёргать ЦБ второй раз — его несёт USD_CBR."""
+        with mock.patch.object(rates, "http_get_xml_text",
+                               side_effect=AssertionError):
+            self.assertEqual(rates.backfill("EUR_CBR"), 0)
 
 
 class TestRatesEndpoint(unittest.TestCase):

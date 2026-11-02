@@ -10,6 +10,7 @@
 
 import os
 import sqlite3
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -70,7 +71,33 @@ SOURCES = {
         "history": "https://iss.moex.com/iss/history/engines/currency/markets/selt/securities/CNYRUB_TOM.json",
         "history_value_key": "WAPRICE",
     },
+    # ── Официальные курсы ЦБ РФ ────────────────────────────────────────────
+    # Один XML ЦБ содержит все валюты разом, поэтому три кода-валюты
+    # обслуживает ОДНА функция (EUR_CBR/CNY_CBR — «aliased» на USD_CBR:
+    # их данные приходят тем же запросом, дублировать HTTP незачем).
+    "USD_CBR": {
+        "provider": "cbr",
+        "title": "Доллар, официальный курс ЦБ",
+        "cbr_charcode": "USD",
+    },
+    "EUR_CBR": {
+        "provider": "cbr",
+        "title": "Евро, официальный курс ЦБ",
+        "cbr_charcode": "EUR",
+        "alias_of": "USD_CBR",     # его данные грузятся вместе с USD_CBR
+    },
+    "CNY_CBR": {
+        "provider": "cbr",
+        "title": "Юань, официальный курс ЦБ",
+        "cbr_charcode": "CNY",
+        "alias_of": "USD_CBR",
+    },
 }
+
+# Единая точка входа официального API ЦБ (не «зеркало», а сам cbr.ru).
+# date_req в формате дд.мм.гггг возвращает курс, ДЕЙСТВУЮЩИЙ в этот день, —
+# работает и для выходных (курс выходного дня = пятничный, как и в жизни).
+CBR_XML_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
 
 HTTP_TIMEOUT = 20  # секунд: биржа иногда думает долго, вечно ждать нельзя
 
@@ -149,12 +176,23 @@ init_db()
 # ---------------------------------------------------------------------------
 
 def http_get_json(url, params=None):
-    """Один GET-запрос. Ошибку бросаем наверх — решит вызывающий."""
+    """Один GET-запрос с разбором JSON. Ошибку бросаем наверх — решит вызывающий."""
     resp = requests.get(url, params=params, timeout=HTTP_TIMEOUT,
                         headers={"User-Agent": "moex-rates/1.0 (educational project)"})
     resp.raise_for_status()
-    # ММВБ иногда отдаёт BOM в начале JSON — utf-8-sig съедает его молча
     return resp.json()
+
+
+def http_get_xml_text(url, params=None):
+    """
+    Тот же GET, но для ЦБ: их XML отдаётся в кодировке windows-1251
+    (да, в 2026-м так бывает). requests угадает cp1251 по заголовку,
+    но перестраховаться — явно указать надёжнее.
+    """
+    resp = requests.get(url, params=params, timeout=HTTP_TIMEOUT,
+                        headers={"User-Agent": "moex-rates/1.0 (educational project)"})
+    resp.raise_for_status()
+    return resp.content.decode("windows-1251")
 
 
 def upsert_rate(db, currency, source, rate_date, rate_time, rate) -> bool:
@@ -233,27 +271,75 @@ def fetch_live_yahoo(currency: str) -> bool:
         return False
 
 
+def fetch_cbr_day(day: date) -> int:
+    """
+    Официальный курс ЦБ на дату `day` (day может быть выходным — ЦБ вернёт
+    актуальный на этот день «замороженный» курс). Один запрос закрывает сразу
+    все три валюты. Возвращает количество записанных значений.
+
+    Формат даты у ЦБ — «дд.мм.гггг» (да, с точками; ещё один привет из 90-х).
+    Курсы в XML разделены запятой («80,5573») — превращаем в точку.
+    Nominal: для USD/EUR/CNY он равен 1, но на будущее делим Value на Nominal,
+    иначе курс юаня «на 10 юаней» улетел бы в 10 раз.
+    """
+    try:
+        raw = http_get_xml_text(CBR_XML_URL, params={"date_req": day.strftime("%d.%m.%Y")})
+        root = ET.fromstring(raw)
+        wanted = {s["cbr_charcode"]: code for code, s in SOURCES.items()
+                  if s["provider"] == "cbr"}
+        saved = 0
+        with get_db() as db:
+            for valute in root.iter("Valute"):
+                charcode = valute.findtext("CharCode")
+                if charcode not in wanted:
+                    continue
+                rate = float(valute.findtext("VunitRate").replace(",", "."))
+                # день, за который просили, и есть «действующий» день курса
+                upsert_rate(db, wanted[charcode], "CBR", day.isoformat(), "", rate)
+                saved += 1
+        return saved
+    except Exception as e:
+        print(f"[CBR] ошибка опроса {day}: {e}")
+        return 0
+
+
 def fetch_live(currency: str) -> bool:
-    """Диспетчер: какой провайдер у этой валюты — туда и идём."""
-    if SOURCES[currency]["provider"] == "yahoo":
+    """Диспетчер: провайдер валюты решает, кто его опрашивает."""
+    provider = SOURCES[currency]["provider"]
+    if provider == "yahoo":
         return fetch_live_yahoo(currency)
+    if provider == "cbr":
+        # один запрос ЦБ отдаёт все валюты: неважно, какой код дёрнули
+        today_msk = datetime.now(MSK).date()
+        return fetch_cbr_day(today_msk) > 0
     return fetch_live_moex(currency)
 
 
 def backfill(currency: str, days: int = 90) -> int:
     """
-    Подтягивает дневную историю ММВБ за days дней (первый запуск, чтобы
-    таблица не была пустой). Нюанс ММВБ: история одного инструмента
-    умещается на одну страницу ответа (100 строк), а пагинация параметром
-    skip у этого эндпоинта работает странно. Поэтому идём «окнами»
-    по 14 дней: 14 дат × 3 секции = ~42 строки — заведомо одна страница.
+    Подтягивает дневную историю за days дней (первый запуск, чтобы таблица
+    не была пустой).
 
-    Yahoo-валюты сюда не попадают: их «история» — последние сутки,
-    которые fetch_live_yahoo забирает целиком и так.
+    • ММВБ: история одного инструмента умещается на одну страницу ответа
+      (100 строк), а пагинация параметром skip у этого эндпоинта работает
+      странно. Поэтому идём «окнами» по 14 дней.
+    • ЦБ: по одному запросу на день (дата-параметр есть, а пакетной истории
+      нет) — зато один запрос закрывает все три валюты, поэтому «алиасы»
+      EUR_CBR/CNY_CBR ничего не качают: их данные приносит USD_CBR.
+    • Yahoo: «история» — последние сутки, их берёт fetch_live_yahoo.
     """
-    if SOURCES[currency]["provider"] != "moex":
-        return 0
     source = SOURCES[currency]
+    if source["provider"] == "yahoo":
+        return 0
+    if source["provider"] == "cbr":
+        if "alias_of" in source:
+            return 0                       # грузится вместе с USD_CBR
+        saved = 0
+        for i in range(days):              # день за днём, от древних к сегодняшнему
+            saved += fetch_cbr_day(date.today() - timedelta(days=i))
+        print(f"[{currency}] backfill ЦБ: записано {saved} значений (все валюты)")
+        return saved
+    # ── moex ──
     saved = 0
     start = date.today() - timedelta(days=days)
     try:
@@ -285,8 +371,17 @@ def backfill(currency: str, days: int = 90) -> int:
 # ---------------------------------------------------------------------------
 
 def hourly_job():
-    """Вызывается APScheduler каждый час."""
-    for currency in SOURCES:
+    """
+    Вызывается APScheduler каждый час. Группирует «aliased» валюты:
+    ЦБ отвечает одним XML на все валюты, поэтому три запроса в час к нему —
+    просто навязчивость, делаем один.
+    """
+    done_groups = set()
+    for currency, source in SOURCES.items():
+        group = source.get("alias_of", currency)
+        if group in done_groups:
+            continue
+        done_groups.add(group)
         fetch_live(currency)
 
 
@@ -317,7 +412,7 @@ if _is_main_process and not os.environ.get("SKIP_SEED"):
         """Первый запуск: история + свежий снимок, не дожидаясь часа."""
         for currency in SOURCES:
             backfill(currency)
-            fetch_live(currency)
+        hourly_job()
     seed_on_startup()
 
 

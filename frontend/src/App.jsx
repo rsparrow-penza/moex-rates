@@ -21,7 +21,11 @@ function dateMinus(days) {
 }
 
 // Короткие подписи для чипов и заголовков (длинное название — в title)
-const LABELS = { USD: 'USD', USD_OTC: 'USD·OTC', EUR: 'EUR', EUR_OTC: 'EUR·OTC', CNY: 'CNY' }
+const LABELS = {
+  USD: 'USD', USD_OTC: 'USD·OTC', USD_CBR: 'USD·ЦБ',
+  EUR: 'EUR', EUR_OTC: 'EUR·OTC', EUR_CBR: 'EUR·ЦБ',
+  CNY: 'CNY', CNY_CBR: 'CNY·ЦБ',
+}
 
 export default function App() {
   const [meta, setMeta] = useState([])              // справочник с сервера
@@ -31,6 +35,9 @@ export default function App() {
   const [rates, setRates] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // Режим графика: 'pct' — сравнение темпами (все на одной шкале %),
+  //             'rub' — абсолютные рубли (каждая валюта на своей полоске)
+  const [mode, setMode] = useState('pct')
 
   // Справочник валют грузим один раз
   useEffect(() => {
@@ -84,7 +91,7 @@ export default function App() {
     return byCode
   }, [rates])
 
-  // --- Таблица: только дневные ряды ММВБ (внутридневные OTC не имеют своей строки) ---
+  // --- Таблица: дневные ряды (ММВБ и ЦБ). Внутридневные OTC строки не имеют ---
   const tableCodes = useMemo(
     () => meta.filter((m) => !m.code.endsWith('_OTC') && picked?.includes(m.code)).map((m) => m.code),
     [meta, picked],
@@ -92,7 +99,7 @@ export default function App() {
   const byDate = useMemo(() => {
     const map = new Map()
     for (const r of rates) {
-      if (r.source !== 'MOEX' || !tableCodes.includes(r.currency)) continue
+      if (!['MOEX', 'CBR'].includes(r.source) || !tableCodes.includes(r.currency)) continue
       if (!map.has(r.rate_date)) map.set(r.rate_date, {})
       map.get(r.rate_date)[r.currency] = r.rate
     }
@@ -104,10 +111,10 @@ export default function App() {
   return (
     <div className="app">
       <h1>📊 Курсы валют</h1>
-      <p className="hint">Фиксинги и спот — с ММВБ; USD·OTC — межбанковская котировка
-        Yahoo Finance, обновляется в течение всего дня</p>
+      <p className="hint">ММВБ — биржевые фиксинги и спот; ·OTC — межбанк Yahoo, весь день;
+        ·ЦБ — официальный курс ЦБ РФ</p>
 
-      {/* Панель фильтров: диапазон дат и валюты */}
+      {/* Панель фильтров: диапазон дат, валюты, режим графика */}
       <div className="filters">
         <label>
           с <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
@@ -125,13 +132,26 @@ export default function App() {
             </label>
           ))}
         </div>
+        {/* Переключатель режима — обычные radio, просто оформлены как сегменты */}
+        <div className="seg" role="radiogroup" aria-label="Режим графика">
+          <label className={mode === 'pct' ? 'seg-on' : ''}>
+            <input type="radio" name="mode" value="pct"
+                   checked={mode === 'pct'} onChange={(e) => setMode(e.target.value)} />
+            %
+          </label>
+          <label className={mode === 'rub' ? 'seg-on' : ''}>
+            <input type="radio" name="mode" value="rub"
+                   checked={mode === 'rub'} onChange={(e) => setMode(e.target.value)} />
+            ₽
+          </label>
+        </div>
         <button onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить'}</button>
       </div>
 
       {error && <div className="error">{error}</div>}
 
       {Object.values(series).some((s) => s.length > 1) &&
-        <Chart series={series} labels={LABELS} />}
+        <Chart series={series} labels={LABELS} mode={mode} />}
 
       <table className="table">
         <thead>

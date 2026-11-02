@@ -86,6 +86,29 @@
   color: #cdd7ff;
 }
 
+/* Сегментное переключение режима графика (% / ₽) */
+.seg {
+  display: flex;
+  border: 1px solid #33334a;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.seg label {
+  padding: 6px 14px;
+  cursor: pointer;
+  color: #9a9ab0;
+}
+
+.seg label input {
+  display: none;
+}
+
+.seg-on {
+  background: #4c6ef5;
+  color: #fff !important;
+}
+
 /* ---------- График ---------- */
 
 .chart {
