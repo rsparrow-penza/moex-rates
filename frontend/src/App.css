@@ -109,19 +109,16 @@
   color: #fff !important;
 }
 
-/* Мировые часы: четыре циферблата в ряд, на узких экранах — 2×2 */
+/* Мировые часы: циферблаты в ряд, ширина колонки ~120px, ряды сами
+   перестроятся под любое число городов и под узкий экран */
 .clocks {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 14px;
   background: #1c1c28;
   border-radius: 14px;
   padding: 16px;
   margin-bottom: 16px;
-}
-
-@media (max-width: 640px) {
-  .clocks { grid-template-columns: repeat(2, 1fr); }
 }
 
 .clock {

@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 const CITIES = [
   { label: 'Токио', tz: 'Asia/Tokyo' },
   { label: 'Гонконг', tz: 'Asia/Hong_Kong' },
+  { label: 'Дубай', tz: 'Asia/Dubai' },
   { label: 'Москва', tz: 'Europe/Moscow' },
   { label: 'Нью-Йорк', tz: 'America/New_York' },
 ]
