@@ -10,7 +10,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
-import Clocks from './Clocks.jsx'
 import './App.css'
 
 // Дефолтный диапазон: последний месяц — через toISOString,
@@ -150,9 +149,6 @@ export default function App() {
       </div>
 
       {error && <div className="error">{error}</div>}
-
-      {/* Мировое время: Токио → Гонконг → Москва → Нью-Йорк */}
-      <Clocks />
 
       {Object.values(series).some((s) => s.length > 1) &&
         <Chart series={series} labels={LABELS} mode={mode} />}
