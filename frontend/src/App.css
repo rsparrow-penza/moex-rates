@@ -109,6 +109,101 @@
   color: #fff !important;
 }
 
+/* ---------- Ключевая ставка ЦБ ---------- */
+
+.key-rate {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.kr-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.kr-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+
+.kr-now {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.kr-now b {
+  font-size: 1.9rem;
+  color: #8fd3c7;
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-now span {
+  color: #9a9ab0;
+  font-size: 0.85rem;
+}
+
+.kr-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  margin-top: 8px;
+}
+
+.kr-chart {
+  flex: 1 1 380px;
+  min-width: 0;
+}
+
+.kr-line {
+  fill: none;
+  stroke: #4c6ef5;
+  stroke-width: 2.5;
+}
+
+.kr-guide {
+  stroke: #33334a;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.kr-label {
+  fill: #77778b;
+  font-size: 10px;
+}
+
+.kr-up   { fill: #ff8787; }   /* повышение — красным */
+.kr-down { fill: #69db7c; }   /* понижение — зелёным */
+
+.kr-changes {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+}
+
+.kr-changes th {
+  color: #9a9ab0;
+  font-weight: 500;
+  text-align: left;
+  padding: 3px 8px;
+}
+
+.kr-changes td {
+  color: #f2f2f7;
+  padding: 3px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-up-text   { color: #ff8787; }
+.kr-down-text { color: #69db7c; }
+
 /* ---------- График ---------- */
 
 .chart {

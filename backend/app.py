@@ -9,6 +9,7 @@
 # Запуск:  python3 app.py   (по умолчанию http://localhost:5002)
 
 import os
+import re
 import sqlite3
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
@@ -99,6 +100,11 @@ SOURCES = {
 # работает и для выходных (курс выходного дня = пятничный, как и в жизни).
 CBR_XML_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
 
+# Ключевая ставка: пакетного XML/JSON у ЦБ нет, зато есть страница с полной
+# таблицей «дата → ставка» (каждый календарный день, данные с 2013 года).
+KEY_RATE_URL = "https://www.cbr.ru/hd_base/KeyRate/"
+KEY_RATE_YEARS = 3          # глубина хранения: старше трёх лет вычищаем
+
 HTTP_TIMEOUT = 20  # секунд: биржа иногда думает долго, вечно ждать нельзя
 
 
@@ -167,6 +173,20 @@ def init_db():
             """
         )
 
+        # Ключевая ставка ЦБ: отдельная таблица — данные другого вида
+        # (проценты, не рубли) и другой живой. Одна строка = один календарный
+        # день; ставка «действует каждый день», поэтому храним полный дневной
+        # ряд, а не только даты изменений — график тогда рисуется без дырок.
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS key_rate (
+                rate_date  TEXT PRIMARY KEY,  -- '2026-11-13'
+                rate       REAL NOT NULL,     -- 14.00 (годовых, %)
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
+
 
 init_db()
 
@@ -183,16 +203,18 @@ def http_get_json(url, params=None):
     return resp.json()
 
 
-def http_get_xml_text(url, params=None):
+def http_get_xml_text(url, params=None, encoding="windows-1251"):
     """
     Тот же GET, но для ЦБ: их XML отдаётся в кодировке windows-1251
     (да, в 2026-м так бывает). requests угадает cp1251 по заголовку,
     но перестраховаться — явно указать надёжнее.
+    HTML-страницы ЦБ, наоборот, в UTF-8 — для них кодировку передают
+    параметром (см. fetch_key_rate).
     """
     resp = requests.get(url, params=params, timeout=HTTP_TIMEOUT,
                         headers={"User-Agent": "moex-rates/1.0 (educational project)"})
     resp.raise_for_status()
-    return resp.content.decode("windows-1251")
+    return resp.content.decode(encoding)
 
 
 def upsert_rate(db, currency, source, rate_date, rate_time, rate) -> bool:
@@ -303,6 +325,48 @@ def fetch_cbr_day(day: date) -> int:
         return 0
 
 
+def fetch_key_rate() -> int:
+    """
+    Ключевая ставка ЦБ: скачиваем страницу с полной историей и разбираем
+    таблицу «день → ставка». ЦБ отдаёт каждый календарный день (ставка
+    действует круглосуточно, включая выходные), формат строк:
+        <td>13.11.2026</td> <td>14,00</td>
+    Записываем только окно в KEY_RATE_YEARS лет (заодно чистим устаревшее),
+    поэтому «глубина хранения 3 года» соблюдается и при backfill, и на
+    каждом часовом обновлении. Возвращает число записанных строк.
+    """
+    cutoff = (datetime.now(MSK).date() - timedelta(days=365 * KEY_RATE_YEARS)).isoformat()
+    try:
+        # dateFrom/dateTo ЦБ понимает прямо в URL (дд.мм.гггг) — одним запросом
+        # получаем ровно нужное окно, а не всю историю с 2013 года.
+        day = datetime.now(MSK).date()
+        html = http_get_xml_text(KEY_RATE_URL, encoding="utf-8", params={
+            "dateFrom": (day - timedelta(days=365 * KEY_RATE_YEARS)).strftime("%d.%m.%Y"),
+            "dateTo": day.strftime("%d.%m.%Y"),
+        })
+        rows = re.findall(
+            r"<td>(\d{2})\.(\d{2})\.(\d{4})</td>\s*<td>([\d]+,\d+)</td>", html)
+        saved = 0
+        fetched_at = datetime.now().isoformat(timespec="seconds")
+        with get_db() as db:
+            for dd, mm, yyyy, value in rows:
+                iso = f"{yyyy}-{mm}-{dd}"
+                if iso < cutoff:
+                    continue
+                db.execute(
+                    "INSERT OR REPLACE INTO key_rate (rate_date, rate, fetched_at) VALUES (?, ?, ?)",
+                    (iso, float(value.replace(",", ".")), fetched_at))
+                saved += 1
+            removed = db.execute("DELETE FROM key_rate WHERE rate_date < ?", (cutoff,)).rowcount
+        if removed:
+            print(f"[key_rate] почистил {removed} строк старше {cutoff}")
+        print(f"[key_rate] записано {saved} дневных значений")
+        return saved
+    except Exception as e:
+        print(f"[key_rate] ошибка опроса: {e}")
+        return 0
+
+
 def fetch_live(currency: str) -> bool:
     """Диспетчер: провайдер валюты решает, кто его опрашивает."""
     provider = SOURCES[currency]["provider"]
@@ -383,6 +447,9 @@ def hourly_job():
             continue
         done_groups.add(group)
         fetch_live(currency)
+    # Ставку тоже освежаем этим же часовым обходом: страница ЦБ одна,
+    # а изменение ставки — событие редкое, часовая задержка незаметна.
+    fetch_key_rate()
 
 
 # Переменные окружения управляются не зря:
@@ -412,7 +479,7 @@ if _is_main_process and not os.environ.get("SKIP_SEED"):
         """Первый запуск: история + свежий снимок, не дожидаясь часа."""
         for currency in SOURCES:
             backfill(currency)
-        hourly_job()
+        hourly_job()     # он же подтянет и ключевую ставку
     seed_on_startup()
 
 
@@ -454,6 +521,28 @@ def rates():
     params = params + selected
     sql += "ORDER BY currency, rate_date, rate_time"
 
+    with get_db() as db:
+        rows = db.execute(sql, params).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/key-rate", methods=["GET"])
+def key_rate():
+    """
+    GET /api/key-rate — дневной ряд ключевой ставки ЦБ за глубину хранения
+    (3 года). from/to необязательные, как у /api/rates. Ответ по возрастанию
+    даты: фронт по нему рисует ступенчатый график и находит дату изменений.
+    """
+    from_ = request.args.get("from")
+    to_ = request.args.get("to")
+    where, params = [], []
+    if from_:
+        where.append("rate_date >= ?"); params.append(from_)
+    if to_:
+        where.append("rate_date <= ?"); params.append(to_)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = (f"SELECT rate_date, rate FROM key_rate {where_sql} "
+           "ORDER BY rate_date")
     with get_db() as db:
         rows = db.execute(sql, params).fetchall()
     return jsonify([dict(r) for r in rows])

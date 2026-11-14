@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
+import KeyRate from './KeyRate.jsx'
 import './App.css'
 
 // Дефолтный диапазон: последний месяц — через toISOString,
@@ -149,6 +150,9 @@ export default function App() {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
+      <KeyRate />
 
       {Object.values(series).some((s) => s.length > 1) &&
         <Chart series={series} labels={LABELS} mode={mode} />}
