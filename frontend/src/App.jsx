@@ -116,7 +116,15 @@ export default function App() {
       <p className="hint">ММВБ — биржевые фиксинги и спот; ·OTC — межбанк Yahoo, весь день;
         ·ЦБ — официальный курс ЦБ РФ</p>
 
-      {/* Панель фильтров: диапазон дат, валюты, режим графика */}
+      {error && <div className="error">{error}</div>}
+
+      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
+      <KeyRate />
+
+      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
+      <CbrCalendar />
+
+      {/* Панель фильтров — под справочными блоками: относится к графику и таблице */}
       <div className="filters">
         <label>
           с <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
@@ -149,14 +157,6 @@ export default function App() {
         </div>
         <button onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить'}</button>
       </div>
-
-      {error && <div className="error">{error}</div>}
-
-      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
-      <KeyRate />
-
-      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
-      <CbrCalendar />
 
       {Object.values(series).some((s) => s.length > 1) &&
         <Chart series={series} labels={LABELS} mode={mode} />}
