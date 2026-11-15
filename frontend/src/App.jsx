@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
 import KeyRate from './KeyRate.jsx'
+import CbrCalendar from './CbrCalendar.jsx'
 import './App.css'
 
 // Дефолтный диапазон: последний месяц — через toISOString,
@@ -153,6 +154,9 @@ export default function App() {
 
       {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
       <KeyRate />
+
+      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
+      <CbrCalendar />
 
       {Object.values(series).some((s) => s.length > 1) &&
         <Chart series={series} labels={LABELS} mode={mode} />}

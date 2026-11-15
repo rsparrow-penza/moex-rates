@@ -75,6 +75,19 @@ export default function KeyRate() {
     .filter((p, i) => i > 0 && p.rate_date.slice(5, 7) === '01' && points[i - 1].rate_date.slice(0, 4) !== p.rate_date.slice(0, 4))
     .map((p) => p.rate_date)
 
+  // Подписи ставок прямо на графике: посередине каждого горизонтального
+  // участка ступеньки — это ставка, утверждённая на заседании в его начале
+  const labels = changes.map((p, i) => ({
+    key: p.rate_date,
+    x: (x(stamp(p.rate_date)) +
+        x(stamp(i + 1 < changes.length ? changes[i + 1].rate_date : last.rate_date))) / 2,
+    y: y(p.rate) - 6,
+    rate: p.rate,
+  }))
+  // Если подписи соседних ступенек сливаются (< 24 px по горизонтали),
+  // вторую пропускаем — её значение видно в таблице и в тултипе точки
+  .filter((l, i, arr) => i === 0 || Math.abs(l.x - arr[i - 1].x) > 24)
+
   return (
     <section className="key-rate" aria-label="Ключевая ставка ЦБ РФ">
       <div className="kr-head">
@@ -106,6 +119,10 @@ export default function KeyRate() {
             </g>
           ))}
           <polyline points={step.join(' ')} className="kr-line" />
+          {labels.map((l) => (
+            <text key={l.key} x={l.x} y={l.y} textAnchor="middle"
+                  className="kr-value">{fmt(l.rate)}</text>
+          ))}
           {/* точки изменений */}
           {changes.map((p) => (
             <circle key={p.rate_date} cx={x(stamp(p.rate_date))} cy={y(p.rate)} r={3.5}
@@ -115,29 +132,31 @@ export default function KeyRate() {
           ))}
         </svg>
 
-        <table className="kr-changes">
-          <thead>
-            <tr><th>Период</th><th>Ставка</th><th>Δ</th></tr>
-          </thead>
-          <tbody>
-            {[...changes].reverse().slice(0, 8).map((p, i, arr) => {
-              const delta = p.rate - p.prev
-              const until = i === 0 ? 'сейчас' : ddmm(arr[i - 1].rate_date)
-              return (
-                <tr key={p.rate_date}>
-                  <td>{ddmm(p.rate_date)} — {until}</td>
-                  <td>{fmt(p.rate)}%</td>
-                  <td className={delta > 0 ? 'kr-up-text' : 'kr-down-text'}>
-                    {delta > 0 ? '▲' : '▼'} {fmt(Math.abs(delta))}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="kr-table-wrap">
+          <table className="kr-changes">
+            <thead>
+              <tr><th>Период</th><th>Ставка</th><th>Δ</th></tr>
+            </thead>
+            <tbody>
+              {[...changes].reverse().map((p, i, arr) => {
+                const delta = p.rate - p.prev
+                const until = i === 0 ? 'сейчас' : ddmm(arr[i - 1].rate_date)
+                return (
+                  <tr key={p.rate_date}>
+                    <td>{ddmm(p.rate_date)} — {until}</td>
+                    <td>{fmt(p.rate)}%</td>
+                    <td className={delta > 0 ? 'kr-up-text' : 'kr-down-text'}>
+                      {delta > 0 ? '▲' : '▼'} {fmt(Math.abs(delta))}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <p className="hint">Глубина хранения — 3 года. Источник: cbr.ru</p>
+      <p className="hint">Все ставки, утверждённые на заседаниях ЦБ за 3 года. Источник: cbr.ru</p>
     </section>
   )
 }
