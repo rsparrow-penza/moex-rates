@@ -6,6 +6,7 @@
 // вертикально в день изменения — визуально ровно те события, что важны.
 
 import { useEffect, useMemo, useState } from 'react'
+import { meetingList } from './cbrMeetings.js'
 
 const W = 720
 const H = 170
@@ -38,11 +39,31 @@ export default function KeyRate() {
     return () => clearInterval(id)
   }, [])
 
-  // Даты, когда ставка реально менялась (шаг ступеньки), — для таблицы
+  // Даты, когда ставка реально менялась (шаг ступеньки), — для графика
   const changes = useMemo(() => {
     const out = []
     for (let i = 1; i < points.length; i++)
       if (points[i].rate !== points[i - 1].rate) out.push({ ...points[i], prev: points[i - 1].rate })
+    return out
+  }, [points])
+
+  // Таблица — по всем заседаниям из официального календаря ЦБ (cbrMeetings.js),
+  // включая те, где ставку не меняли. Решение вступает в силу в ближайшие
+  // дни после заседания, поэтому берём ставку через неделю после даты M:
+  // она уже отражает итог именно этого заседания (до следующего далеко)
+  const meetings = useMemo(() => {
+    if (points.length < 2) return []
+    const first = points[0].rate_date
+    const until = points[points.length - 1].rate_date
+    const out = []
+    for (const m of meetingList()) {
+      if (m.date < first || m.date > until) continue
+      const t = stamp(m.date) + 7 * 86400000
+      let p = null
+      for (const q of points) { if (stamp(q.rate_date) > t) break; p = q }
+      if (!p) continue
+      out.push({ ...m, rate: p.rate, prev: out.length ? out[out.length - 1].rate : null })
+    }
     return out
   }, [points])
 
@@ -135,18 +156,19 @@ export default function KeyRate() {
         <div className="kr-table-wrap">
           <table className="kr-changes">
             <thead>
-              <tr><th>Период</th><th>Ставка</th><th>Δ</th></tr>
+              <tr><th>Заседание</th><th>Ставка</th><th>Решение</th></tr>
             </thead>
             <tbody>
-              {[...changes].reverse().map((p, i, arr) => {
-                const delta = p.rate - p.prev
-                const until = i === 0 ? 'сейчас' : ddmm(arr[i - 1].rate_date)
+              {[...meetings].reverse().map((m) => {
+                const delta = m.prev == null ? null : Math.round((m.rate - m.prev) * 100)
                 return (
-                  <tr key={p.rate_date}>
-                    <td>{ddmm(p.rate_date)} — {until}</td>
-                    <td>{fmt(p.rate)}%</td>
-                    <td className={delta > 0 ? 'kr-up-text' : 'kr-down-text'}>
-                      {delta > 0 ? '▲' : '▼'} {fmt(Math.abs(delta))}
+                  <tr key={m.date}>
+                    <td>{ddmm(m.date)}{m.anchor && <em className="kr-anchor">опорное</em>}</td>
+                    <td>{fmt(m.rate)}%</td>
+                    <td className={delta == null ? 'kr-same' : delta > 0 ? 'kr-up-text' : delta < 0 ? 'kr-down-text' : 'kr-same'}>
+                      {delta == null ? 'первое в окне'
+                        : delta === 0 ? '— сохранена'
+                        : `${delta > 0 ? '▲' : '▼'} ${fmt(Math.abs(delta / 100))}`}
                     </td>
                   </tr>
                 )
@@ -156,7 +178,10 @@ export default function KeyRate() {
         </div>
       </div>
 
-      <p className="hint">Все ставки, утверждённые на заседаниях ЦБ за 3 года. Источник: cbr.ru</p>
+      <p className="hint">
+        В таблице — все заседания ЦБ за 3 года, включая те, где ставку сохранили.
+        Источник: cbr.ru
+      </p>
     </section>
   )
 }

@@ -232,6 +232,15 @@
 
 .kr-up-text   { color: #ff8787; }
 .kr-down-text { color: #69db7c; }
+.kr-same      { color: #77778b; }
+
+/* пометка опорного заседания в таблице — мелким серым */
+.kr-anchor {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: #55556a;
+  margin-left: 6px;
+}
 
 /* ---------- Календарь заседаний ЦБ (справочно) ---------- */
 
