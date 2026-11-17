@@ -6,6 +6,39 @@
 // anchor — опорное заседание: вместе с решением публикуется среднесрочный прогноз.
 
 export const MEETINGS = {
+  2020: [
+    { date: '2020-02-07', anchor: true },
+    { date: '2020-03-20', anchor: false },
+    { date: '2020-04-24', anchor: true },
+    { date: '2020-06-19', anchor: false },
+    { date: '2020-07-24', anchor: true },
+    { date: '2020-09-18', anchor: false },
+    { date: '2020-10-23', anchor: true },
+    { date: '2020-12-18', anchor: false },
+  ],
+  2021: [
+    { date: '2021-02-12', anchor: true },
+    { date: '2021-03-19', anchor: false },
+    { date: '2021-04-23', anchor: true },
+    { date: '2021-06-11', anchor: false },
+    { date: '2021-07-23', anchor: true },
+    { date: '2021-09-10', anchor: false },
+    { date: '2021-10-22', anchor: true },
+    { date: '2021-12-17', anchor: false },
+  ],
+  2022: [
+    { date: '2022-02-11', anchor: true },
+    { date: '2022-02-28', anchor: false, extra: true }, // внеочередное
+    { date: '2022-03-18', anchor: false },
+    { date: '2022-04-08', anchor: false, extra: true }, // внеочередное
+    { date: '2022-04-29', anchor: true },
+    { date: '2022-05-26', anchor: false, extra: true }, // внеочередное
+    { date: '2022-06-10', anchor: false },
+    { date: '2022-07-22', anchor: true },
+    { date: '2022-09-16', anchor: false },
+    { date: '2022-10-28', anchor: true },
+    { date: '2022-12-19', anchor: false },
+  ],
   2023: [
     { date: '2023-02-10', anchor: true },
     { date: '2023-03-17', anchor: false },
