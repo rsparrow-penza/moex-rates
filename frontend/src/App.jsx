@@ -1,12 +1,12 @@
-// App.jsx — курсы валют: ММВБ (фиксинги/спот) + внебиржевой USD (Yahoo OTC).
+// App.jsx — курсы валют: межбанк ·OTC (Yahoo) и официальные ·ЦБ.
 //
-// Список валют теперь приходит от бэкенда (GET /api/currencies) —
-// чтобы добавить четвёртую валюту, достаточно изменить SOURCES в Python.
+// Список валют приходит от бэкенда (GET /api/currencies), но биржевые коды
+// ММВБ (EXCHANGE_CODES) в интерфейсе скрыты — сбор в бэкенде не трогали.
 //
-// Данные делятся на два"use":
-//   • таблица — дневные значения ММВБ (source=MOEX), строка = дата;
-//   • график — всё подряд, включая внутридневные точки Yahoo (15-минутки),
-//     поэтому USD на графике будет «змеей», а USD в таблице — точкой в день.
+// Данные делятся на два «use»:
+//   • график — все видимые серии: дневные ЦБ и внутридневные OTC
+//     (15-минутки, поэтому OTC на графике «змея»);
+//   • таблица — дневные значения (source=CBR), строка = дата.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart from './Chart.jsx'
@@ -29,6 +29,12 @@ const LABELS = {
   CNY: 'CNY', CNY_CBR: 'CNY·ЦБ',
 }
 
+// Биржевые серии ММВБ (фиксинги USD/EUR и спот CNY) из интерфейса убраны
+// полностью: нет чипов в фильтрах, линий на графике и колонок в таблице.
+// Бэкенд их продолжает собирать — история лежит в базе, вернуть отображение
+// можно одной строкой.
+const EXCHANGE_CODES = ['USD', 'EUR', 'CNY']
+
 export default function App() {
   const [meta, setMeta] = useState([])              // справочник с сервера
   const [from, setFrom] = useState(dateMinus(30))
@@ -45,7 +51,8 @@ export default function App() {
   useEffect(() => {
     fetch('/api/currencies')
       .then((r) => r.json())
-      .then((list) => {
+      .then((all) => {
+        const list = all.filter((m) => !EXCHANGE_CODES.includes(m.code))
         setMeta(list)
         setPicked(list.map((m) => m.code))
       })
@@ -93,6 +100,15 @@ export default function App() {
     return byCode
   }, [rates])
 
+  // Биржевые линии на графике не рисуем в принципе (см. EXCHANGE_CODES):
+  // остаются только ·OTC (межбанк) и ·ЦБ (официальный)
+  const chartSeries = useMemo(() => {
+    const out = {}
+    for (const [code, pts] of Object.entries(series))
+      if (!EXCHANGE_CODES.includes(code)) out[code] = pts
+    return out
+  }, [series])
+
   // --- Таблица: дневные ряды (ММВБ и ЦБ). Внутридневные OTC строки не имеют ---
   const tableCodes = useMemo(
     () => meta.filter((m) => !m.code.endsWith('_OTC') && picked?.includes(m.code)).map((m) => m.code),
@@ -113,18 +129,12 @@ export default function App() {
   return (
     <div className="app">
       <h1>📊 Курсы валют</h1>
-      <p className="hint">ММВБ — биржевые фиксинги и спот; ·OTC — межбанк Yahoo, весь день;
-        ·ЦБ — официальный курс ЦБ РФ</p>
+      <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ</p>
 
       {error && <div className="error">{error}</div>}
 
-      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
-      <KeyRate />
-
-      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
-      <CbrCalendar />
-
-      {/* Панель фильтров — под справочными блоками: относится к графику и таблице */}
+      {/* Панель фильтров и график курсов — на самом верху: рабочий инструмент
+          страницы, справочные блоки ЦБ ушли под них */}
       <div className="filters">
         <label>
           с <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
@@ -158,8 +168,14 @@ export default function App() {
         <button onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить'}</button>
       </div>
 
-      {Object.values(series).some((s) => s.length > 1) &&
-        <Chart series={series} labels={LABELS} mode={mode} />}
+      {Object.values(chartSeries).some((s) => s.length > 1) &&
+        <Chart series={chartSeries} labels={LABELS} mode={mode} />}
+
+      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
+      <KeyRate />
+
+      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
+      <CbrCalendar />
 
       <table className="table">
         <thead>
