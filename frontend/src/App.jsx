@@ -28,6 +28,7 @@ const LABELS = {
   USD: 'USD', USD_OTC: 'USD·OTC', USD_CBR: 'USD·ЦБ',
   EUR: 'EUR', EUR_OTC: 'EUR·OTC', EUR_CBR: 'EUR·ЦБ',
   CNY: 'CNY', CNY_CBR: 'CNY·ЦБ',
+  BTC: 'Bitcoin ₽', BRENT: 'Brent $',
 }
 
 // Биржевые серии ММВБ (фиксинги USD/EUR и спот CNY) из интерфейса убраны
@@ -110,9 +111,10 @@ function RatesApp() {
     return out
   }, [series])
 
-  // --- Таблица: дневные ряды (ММВБ и ЦБ). Внутридневные OTC строки не имеют ---
+  // --- Таблица: дневные ряды провайдеров moex/cbr. Внутридневные OTC-строки, ---
+  // биткоин и нефть (у них своя природа и своя валюта) в неё не попадают
   const tableCodes = useMemo(
-    () => meta.filter((m) => !m.code.endsWith('_OTC') && picked?.includes(m.code)).map((m) => m.code),
+    () => meta.filter((m) => ['moex', 'cbr'].includes(m.provider) && picked?.includes(m.code)).map((m) => m.code),
     [meta, picked],
   )
   const byDate = useMemo(() => {
@@ -149,7 +151,8 @@ function RatesApp() {
         <h1>📊 Курсы валют</h1>
         <a className="nav-link" href="#/changelog">История изменений →</a>
       </div>
-      <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ</p>
+      <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
+        Bitcoin ₽ и Brent $ — активы, только график</p>
 
       {error && <div className="error">{error}</div>}
 

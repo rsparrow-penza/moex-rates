@@ -29,8 +29,23 @@ const COLORS = {
   EUR_CBR: '#20c997',
   CNY: '#e8590c',
   CNY_CBR: '#e8590c',
+  BTC: '#fab005',         // биткоин — золото
+  BRENT: '#adb5bd',       // Brent — «нефтяной» графитовый
 }
 const PALETTE = ['#4c6ef5', '#e8590c', '#20c997', '#845ef7', '#f06595']
+
+// Единицы отображения: всё в рублях, кроме нефти (Brent торгуется в $)
+const UNITS = { BRENT: '$' }
+const unitFor = (code) => UNITS[code] ?? '₽'
+
+// Числа вида 5 500 000 ₽ длинны и людям не нужны — крупное округляем
+// до целых с разрядами, мелкое оставляем с копейками
+const fmtVal = (v, unit) => {
+  const num = Math.abs(v) >= 1000
+    ? Math.round(v).toLocaleString('ru-RU')
+    : v.toFixed(2)
+  return `${unit === '%' && v >= 0 ? '+' : ''}${num} ${unit}`
+}
 const colorFor = (code, i) => COLORS[code] ?? PALETTE[i % PALETTE.length]
 
 // Дата+время → единый «момент» для оси X; дневным значениям дописываем
@@ -149,7 +164,7 @@ function Series({ code, points, x, y, labels, dashed, unit = '₽' }) {
                 cx={x(stamp(p))} cy={y(p.rate)}
                 r={p.rate_time ? 2 : 3} fill={color}>
           <title>{`${labels[code] ?? code} ${p.rate_date}${p.rate_time ? ' ' + p.rate_time : ''}: ` +
-                  `${p.rate >= 0 && unit === '%' ? '+' : ''}${p.rate.toFixed(2)} ${unit}`}</title>
+                  fmtVal(p.rate, unit)}</title>
         </circle>
       ))}
     </g>
@@ -194,7 +209,7 @@ function PctChart({ series, labels }) {
       return {
         code: c, color: colorFor(c, i), label: labels[c] ?? c,
         when: raw.rate_time ? raw.rate_time.slice(0, 5) : '',
-        text: `${p.rate >= 0 ? '+' : ''}${p.rate.toFixed(2)} % · ${raw.rate.toFixed(2)} ₽`,
+        text: `${fmtVal(p.rate, '%')} · ${fmtVal(raw.rate, unitFor(c))}`,
       }
     }),
   })
@@ -260,7 +275,7 @@ function RubChart({ series, labels }) {
       return {
         code: c, color: colorFor(c, i), label: labels[c] ?? c,
         when: p.rate_time ? p.rate_time.slice(0, 5) : '',
-        text: `${p.rate.toFixed(2)} ₽`,
+        text: fmtVal(p.rate, unitFor(c)),
       }
     }),
   })
@@ -287,12 +302,16 @@ function RubChart({ series, labels }) {
               </text>
               <text x={W - 8} y={top + 18} fontSize="13" fill="#f2f2f7"
                     textAnchor="end" fontWeight="600">
-                {last.rate.toFixed(2)} ₽
+                {fmtVal(last.rate, unitFor(code))}
               </text>
-              <text x={PAD.left - 6} y={y(hi) + 8} fontSize="10" fill="#666" textAnchor="end">{hi.toFixed(1)}</text>
-              <text x={PAD.left - 6} y={y(lo)} fontSize="10" fill="#666" textAnchor="end">{lo.toFixed(1)}</text>
+              <text x={PAD.left - 6} y={y(hi) + 8} fontSize="10" fill="#666" textAnchor="end">
+                {Math.abs(hi) >= 1000 ? Math.round(hi).toLocaleString('ru-RU') : hi.toFixed(1)}
+              </text>
+              <text x={PAD.left - 6} y={y(lo)} fontSize="10" fill="#666" textAnchor="end">
+                {Math.abs(lo) >= 1000 ? Math.round(lo).toLocaleString('ru-RU') : lo.toFixed(1)}
+              </text>
               <Series code={code} points={series[code]} x={x} y={y} labels={labels}
-                      dashed={code.endsWith('_CBR')} />
+                      dashed={code.endsWith('_CBR')} unit={unitFor(code)} />
             </g>
           )
         })}
@@ -308,7 +327,7 @@ function RubChart({ series, labels }) {
       </svg>
       <TipBox tip={tip} />
       <div className="legend">
-        <span className="legend-note">абсолютный курс, ₽ (у каждой валюты своя вертикальная шкала)</span>
+        <span className="legend-note">абсолютная цена (₽, Brent в $; у каждой серии своя шкала)</span>
       </div>
     </>
   )

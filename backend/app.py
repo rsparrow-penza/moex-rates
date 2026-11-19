@@ -26,9 +26,10 @@ CORS(app)
 DB_FILE = os.environ.get("DATABASE_FILE", "rates.db")
 MSK = ZoneInfo("Europe/Moscow")   # живём в биржевом времени, а не в UTC сервера
 
-# Источники данных. У каждого есть provider: «moex» (публичный ISS-API биржи)
-# или «yahoo» (неофициальный, но общедоступный endpoint Yahoo Finance,
-# котировки OTC-межбанка — обновляются круглосуточно, каждые ~15 минут).
+# Источники данных. У каждого есть provider: «moex» (публичный ISS-API биржи),
+# «yahoo» (неофициальный, но общедоступный endpoint Yahoo Finance — OTC-
+# межбанк обновляется круглосуточно, каждые ~15 минут) или «coingecko»
+# (криптобиржи: bitcoin 24/7, курс к рублю).
 SOURCES = {
     "USD": {
         "provider": "moex",
@@ -92,6 +93,23 @@ SOURCES = {
         "title": "Юань, официальный курс ЦБ",
         "cbr_charcode": "CNY",
         "alias_of": "USD_CBR",
+    },
+    # ── Не валюты, а активы: bitcoin и нефть — для графика курсов ──────────
+    # В таблице дневных ₽ их нет (источник не MOEX/CBR), только линии.
+    "BTC": {
+        "provider": "coingecko",
+        "title": "Bitcoin (CoinGecko, ₽)",
+        "live": "https://api.coingecko.com/api/v3/simple/price",
+        "history": "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+    },
+    "BRENT": {
+        "provider": "yahoo",
+        "title": "Нефть Brent (ICE, $ за баррель)",
+        # тот же chart-endpoint, что у OTC, только тикер фьючерса Brent;
+        # backfill_daily — в отличие от валют, историю качаем дневную (90 дней)
+        "live": "https://query1.finance.yahoo.com/v8/finance/chart/BZ=F",
+        "ticker": "BZ=F",
+        "backfill_daily": True,
     },
 }
 
@@ -295,6 +313,28 @@ def fetch_live_yahoo(currency: str) -> bool:
         return False
 
 
+def fetch_live_coingecko(currency: str) -> bool:
+    """
+    Bitcoin: CoinGecko simple/price — текущая цена в рублях. Крипторынок
+    работает 24/7, поэтому точку пишем со временем: на графике биткоин —
+    непрерывная «змея», как OTC-валюты.
+    """
+    source = SOURCES[currency]
+    try:
+        payload = http_get_json(source["live"],
+                                params={"ids": "bitcoin", "vs_currencies": "rub"})
+        price = payload["bitcoin"]["rub"]
+        now = datetime.now(MSK)
+        with get_db() as db:
+            ok = upsert_rate(db, currency, "COINGECKO",
+                             now.date().isoformat(), now.strftime("%H:%M"), price)
+        print(f"[{currency}] coingecko: {price} ₽")
+        return ok
+    except Exception as e:
+        print(f"[{currency}] ошибка coingecko-опроса: {e}")
+        return False
+
+
 def fetch_cbr_day(day: date) -> int:
     """
     Официальный курс ЦБ на дату `day` (day может быть выходным — ЦБ вернёт
@@ -374,11 +414,64 @@ def fetch_live(currency: str) -> bool:
     provider = SOURCES[currency]["provider"]
     if provider == "yahoo":
         return fetch_live_yahoo(currency)
+    if provider == "coingecko":
+        return fetch_live_coingecko(currency)
     if provider == "cbr":
         # один запрос ЦБ отдаёт все валюты: неважно, какой код дёрнули
         today_msk = datetime.now(MSK).date()
         return fetch_cbr_day(today_msk) > 0
     return fetch_live_moex(currency)
+
+
+def backfill_yahoo_daily(currency: str, days: int) -> int:
+    """
+    Дневная история для «товарных» yahoo-тикеров (Brent): тот же chart-endpoint,
+    но interval=1d. Валютным OTC это не нужно — у них хватает суток 15-минуток.
+    """
+    source = SOURCES[currency]
+    try:
+        payload = http_get_json(source["live"], params={"interval": "1d", "range": f"{days}d"})
+        result = payload["chart"]["result"][0]
+        stamps = result.get("timestamp", [])
+        closes = result["indicators"]["quote"][0].get("close", [])
+        saved = 0
+        with get_db() as db:
+            for ts, price in zip(stamps, closes):
+                if price is None:
+                    continue
+                msk = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MSK)
+                # дневное закрытие: без времени — точка «в день», как у биржи
+                if upsert_rate(db, currency, "YAHOO", msk.date().isoformat(), "", price):
+                    saved += 1
+        print(f"[{currency}] yahoo backfill: записано {saved} дневных закрытий")
+        return saved
+    except Exception as e:
+        print(f"[{currency}] ошибка yahoo-backfill: {e}")
+        return 0
+
+
+def backfill_coingecko(currency: str, days: int) -> int:
+    """
+    Дневная история биткоина: market_chart отдаёт prices = [[ms, цена], ...]
+    одним ответом на любой запрос — идеальная пакетная история.
+    """
+    try:
+        payload = http_get_json(SOURCES[currency]["history"],
+                                params={"vs_currency": "rub", "days": days,
+                                        "interval": "daily"})
+        saved = 0
+        with get_db() as db:
+            for ms, price in payload.get("prices", []):
+                if price is None:
+                    continue
+                msk = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(MSK)
+                if upsert_rate(db, currency, "COINGECKO", msk.date().isoformat(), "", price):
+                    saved += 1
+        print(f"[{currency}] coingecko backfill: записано {saved} дневных цен")
+        return saved
+    except Exception as e:
+        print(f"[{currency}] ошибка coingecko-backfill: {e}")
+        return 0
 
 
 def backfill(currency: str, days: int = 90) -> int:
@@ -392,11 +485,17 @@ def backfill(currency: str, days: int = 90) -> int:
     • ЦБ: по одному запросу на день (дата-параметр есть, а пакетной истории
       нет) — зато один запрос закрывает все три валюты, поэтому «алиасы»
       EUR_CBR/CNY_CBR ничего не качают: их данные приносит USD_CBR.
-    • Yahoo: «история» — последние сутки, их берёт fetch_live_yahoo.
+    • Yahoo: «история» — последние сутки, их берёт fetch_live_yahoo. Исключение
+      — товарные тикеры с флагом backfill_daily (Brent): у них просим 1d-ряд.
+    • CoinGecko: market_chart сразу отдаёт дневную историю за N дней.
     """
     source = SOURCES[currency]
     if source["provider"] == "yahoo":
+        if source.get("backfill_daily"):
+            return backfill_yahoo_daily(currency, days)
         return 0
+    if source["provider"] == "coingecko":
+        return backfill_coingecko(currency, days)
     if source["provider"] == "cbr":
         if "alias_of" in source:
             return 0                       # грузится вместе с USD_CBR
@@ -491,8 +590,11 @@ if _is_main_process and not os.environ.get("SKIP_SEED"):
 
 @app.route("/api/currencies", methods=["GET"])
 def currencies():
-    """Справочник валют — фронт строит из него чекбоксы."""
-    return jsonify([{"code": c, "title": s["title"]} for c, s in SOURCES.items()])
+    """Справочник валют — фронт строит из него чекбоксы.
+    provider нужен фронту, чтобы отличать дневные ₽-ряды (таблица) от
+    внутридневных «змей» и активов (график без таблицы)."""
+    return jsonify([{"code": c, "title": s["title"], "provider": s["provider"]}
+                    for c, s in SOURCES.items()])
 
 
 @app.route("/api/rates", methods=["GET"])
