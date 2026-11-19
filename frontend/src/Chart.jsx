@@ -48,10 +48,11 @@ function nearestIdx(pts, ts) {
 // Момент → «2026-11-04» по МСК
 const dayOf = (ts) => new Date(ts + 3 * 3600e3).toISOString().slice(0, 10)
 
-// Локальные экстремумы серии: точка — максимум, если она не ниже всех
-// соседей в окне ±K и при этом возвышается над «дном» окна минимум на
-// половину размаха окна (иначе это плечо, а не вершина). Порог от размаха
-// делает метод независимым от масштаба — он одинаково работает и в %, и в ₽.
+// Локальные экстремумы ряда: точка — максимум, если она не ниже всех
+// соседей в окне ±K, ниже неё есть строго меньше и слева, и справа (иначе
+// это плечо монотонного роста или край плато «лестницы»), и возвышается
+// над «дном» окна минимум на половину его размаха. Порог от размаха делает
+// метод независимым от масштаба — он одинаково работает и в %, и в ₽.
 // Подряд идущие одноимённые отметки сливаются в одну (самую выразительную).
 export function localExtrema(vals) {
   const n = vals.length
@@ -59,20 +60,26 @@ export function localExtrema(vals) {
   const out = []
   for (let i = K; i < n - K; i++) {
     const v = vals[i]
-    let hi = -Infinity, lo = Infinity, isMax = true, isMin = true
+    let hi = -Infinity, lo = Infinity
+    let isMax = true, isMin = true
+    let lowL = false, lowR = false, highL = false, highR = false
     for (let j = i - K; j <= i + K; j++) {
+      if (j === i) continue
       const w = vals[j]
-      if (j !== i) {
-        if (w > v) isMax = false
-        if (w < v) isMin = false
-      }
       if (w > hi) hi = w
       if (w < lo) lo = w
+      if (w > v) {
+        isMax = false
+        if (j < i) highL = true; else highR = true
+      } else if (w < v) {
+        isMin = false
+        if (j < i) lowL = true; else lowR = true
+      }
     }
     const span = hi - lo
     if (span <= 0) continue
-    if (isMax && v - lo >= 0.5 * span) out.push({ i, type: 'max' })
-    else if (isMin && hi - v >= 0.5 * span) out.push({ i, type: 'min' })
+    if (isMax && lowL && lowR && v - lo >= 0.5 * span) out.push({ i, type: 'max' })
+    else if (isMin && highL && highR && hi - v >= 0.5 * span) out.push({ i, type: 'min' })
   }
   const res = []
   for (const e of out) {

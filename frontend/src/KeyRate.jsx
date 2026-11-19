@@ -23,6 +23,26 @@ const ddmm = (iso) => {
   return `${d}.${m}.${y}`
 }
 
+// Ряд решений ЦБ — ступенька. Сжимаем подряд равные ставки в блоки-плато:
+// блок-максимум строго выше обоих соседних блоков, минимум — строго ниже.
+// Отмечаем первое заседание блока — именно на нём ставку и утвердили.
+// Крайние блоки не участвуют: соседа с одной стороны у них нет.
+function stepExtrema(rates) {
+  const blocks = []
+  rates.forEach((v, i) => {
+    const b = blocks[blocks.length - 1]
+    if (b && b.v === v) b.end = i
+    else blocks.push({ start: i, end: i, v })
+  })
+  const out = []
+  for (let k = 1; k < blocks.length - 1; k++) {
+    const p = blocks[k - 1].v, c = blocks[k].v, n = blocks[k + 1].v
+    if (c > p && c > n) out.push({ i: blocks[k].start, type: 'max' })
+    else if (c < p && c < n) out.push({ i: blocks[k].start, type: 'min' })
+  }
+  return out
+}
+
 export default function KeyRate() {
   const [points, setPoints] = useState([])
   const [error, setError] = useState('')
@@ -66,6 +86,15 @@ export default function KeyRate() {
     }
     return out
   }, [points])
+
+  // Локальные экстремумы ряда решений — плато-критерием (stepExtrema):
+  // вершина/яма из соседних заседаний, отметка на заседании, утвердившем ставку
+  const extFlags = useMemo(() => {
+    const flags = {}
+    for (const { i, type } of stepExtrema(meetings.map((m) => m.rate)))
+      flags[meetings[i].date] = type
+    return flags
+  }, [meetings])
 
   if (error) return <section className="key-rate"><div className="error">{error}</div></section>
   if (!points.length) return <section className="key-rate"><p className="hint">Загрузка ставки…</p></section>
@@ -166,10 +195,14 @@ export default function KeyRate() {
             <tbody>
               {[...meetings].reverse().map((m) => {
                 const delta = m.prev == null ? null : Math.round((m.rate - m.prev) * 100)
+                const ex = extFlags[m.date]
                 return (
                   <tr key={m.date}>
                     <td>{ddmm(m.date)}{m.anchor && <em className="kr-anchor">опорное</em>}</td>
-                    <td>{fmt(m.rate)}%</td>
+                    <td className={ex === 'max' ? 'cell-max' : ex === 'min' ? 'cell-min' : undefined}
+                        title={ex ? `локальный ${ex === 'max' ? 'максимум' : 'минимум'} ряда ставок` : undefined}>
+                      {ex === 'max' ? '▲ ' : ex === 'min' ? '▼ ' : ''}{fmt(m.rate)}%
+                    </td>
                     <td className={delta == null ? 'kr-same' : delta > 0 ? 'kr-up-text' : delta < 0 ? 'kr-down-text' : 'kr-same'}>
                       {delta == null ? 'первое в окне'
                         : delta === 0 ? '— сохранена'

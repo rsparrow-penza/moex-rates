@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart, { localExtrema } from './Chart.jsx'
+import Changelog from './Changelog.jsx'
 import KeyRate from './KeyRate.jsx'
 import CbrCalendar from './CbrCalendar.jsx'
 import './App.css'
@@ -35,7 +36,7 @@ const LABELS = {
 // можно одной строкой.
 const EXCHANGE_CODES = ['USD', 'EUR', 'CNY']
 
-export default function App() {
+function RatesApp() {
   const [meta, setMeta] = useState([])              // справочник с сервера
   const [from, setFrom] = useState(dateMinus(30))
   const [to, setTo] = useState(dateMinus(0))
@@ -144,7 +145,10 @@ export default function App() {
 
   return (
     <div className="app">
-      <h1>📊 Курсы валют</h1>
+      <div className="title-row">
+        <h1>📊 Курсы валют</h1>
+        <a className="nav-link" href="#/changelog">История изменений →</a>
+      </div>
       <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ</p>
 
       {error && <div className="error">{error}</div>}
@@ -220,4 +224,21 @@ export default function App() {
       </table>
     </div>
   )
+}
+
+// --- Мини-роутинг по хешу: #/changelog — страница истории изменений ---
+// Библиотека не нужна: адресов два, достаточно слушать hashchange.
+
+export default function Router() {
+  const [page, setPage] = useState(() => window.location.hash)
+  useEffect(() => {
+    const onHash = () => {
+      setPage(window.location.hash)
+      window.scrollTo(0, 0)
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  if (page === '#/changelog') return <Changelog />
+  return <RatesApp />
 }

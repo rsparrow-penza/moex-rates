@@ -19,9 +19,23 @@
 
 /* Пресс-подводка под заголовком — придвигаем вплотную; внутри карточек
    (ставка, календарь) отступ остаётся обычным, иначе текст залезает на содержимое */
-.app > h1 + .hint {
+.app > .title-row + .hint {
   margin-top: -12px;
 }
+
+.title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 20px;
+}
+
+.nav-link {
+  color: #8fa8ff;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.nav-link:hover { text-decoration: underline; }
 
 /* ---------- Фильтры ---------- */
 
@@ -385,9 +399,10 @@
 }
 
 /* локальные экстремумы курса в таблице: вершина — красным, яма — зелёным;
-   ▲/▼ перед числом дублирует знак для различающих цвета */
-.cell-max { color: #ff8787; font-weight: 700; }
-.cell-min { color: #69db7c; font-weight: 700; }
+   ▲/▼ перед числом дублирует знак для различающих цвета.
+   селектор с td и ниже по файлу, чем .kr-changes td / .table td, — перебивает их цвет */
+td.cell-max { color: #ff8787; font-weight: 700; }
+td.cell-min { color: #69db7c; font-weight: 700; }
 
 .chart-tip {
   position: absolute;
@@ -443,4 +458,43 @@
   border-radius: 10px;
   padding: 10px 14px;
   margin: 12px 0;
+}
+
+/* ---------- Страница «История изменений» ---------- */
+
+.changelog {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 8px 18px;
+}
+
+.cl-item {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid #26263a;
+}
+
+.cl-item:last-child {
+  border-bottom: none;
+}
+
+.cl-date {
+  flex: 0 0 84px;
+  color: #8fa8ff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.changelog ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #c7c7d8;
+  font-size: 0.9rem;
+}
+
+.changelog li {
+  margin: 3px 0;
 }
