@@ -11,6 +11,7 @@
 import os
 import re
 import sqlite3
+import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -576,10 +577,27 @@ if _is_main_process and not os.environ.get("SKIP_SCHEDULER"):
     scheduler.start()
 
 if _is_main_process and not os.environ.get("SKIP_SEED"):
+    def _has_backfill(currency: str) -> bool:
+        """Должен ли этот код что-то выкачивать при backfill.
+        Yahoo-OTC валюты — нет (история = сутки из fetch_live), алиасы ЦБ — нет."""
+        s = SOURCES[currency]
+        if s["provider"] == "yahoo":
+            return bool(s.get("backfill_daily"))
+        if s["provider"] == "cbr":
+            return "alias_of" not in s
+        return True
+
     def seed_on_startup():
-        """Первый запуск: история + свежий снимок, не дожидаясь часа."""
-        for currency in SOURCES:
-            backfill(currency)
+        """Первый запуск: история + свежий снимок, не дожидаясь часа.
+        Пустой backfill у «источника с историей» — скорее всего временный
+        лимит (Yahoo/CoinGecko иногда молчат после шквала запросов), поэтому
+        такие коды получают одну повторную попытку после короткой паузы."""
+        empty = [c for c in SOURCES if not backfill(c) and _has_backfill(c)]
+        if empty:
+            print(f"[seed] пусто по {empty} — повторяю через 5 секунд")
+            time.sleep(5)
+            for currency in empty:
+                backfill(currency)
         hourly_job()     # он же подтянет и ключевую ставку
     seed_on_startup()
 
