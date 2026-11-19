@@ -23,6 +23,18 @@ function dateMinus(days) {
   return d.toISOString().slice(0, 10)
 }
 
+// Пояснение по каждому тикеру — что это за инструмент и чем он дышит.
+// Живёт под фильтрами; приглушается, когда тикер выключен чипом.
+const EXPLAIN = {
+  USD_OTC: 'межбанковский USD/RUB (Yahoo, RUB=X): внутридневные точки каждые ~15 минут, почти круглосуточно — тот же курс, что в приложении «Акции»',
+  EUR_OTC: 'межбанковский EUR/RUB (Yahoo, EURRUB=X): та же площадка и тот же 15-минутный шаг, что и у доллара',
+  USD_CBR: 'официальный курс ЦБ РФ по доллару: одно значение в день, действует со следующего (cbr.ru)',
+  EUR_CBR: 'официальный курс ЦБ РФ по евро: обновление раз в день',
+  CNY_CBR: 'официальный курс ЦБ РФ по юаню: обновление раз в день',
+  BTC: 'биткоин к рублю (CoinGecko): крипторынок работает 24/7, точка раз в час — непрерывная «змея»',
+  BRENT: 'нефть Brent, фьючерс ICE (BZ=F): котировка в $ за баррель, дневные закрытия плюс внутридневные точки',
+}
+
 // Короткие подписи для чипов и заголовков (длинное название — в title)
 const LABELS = {
   USD: 'USD', USD_OTC: 'USD·OTC', USD_CBR: 'USD·ЦБ',
@@ -148,7 +160,7 @@ function RatesApp() {
   return (
     <div className="app">
       <div className="title-row">
-        <h1>📊 Курсы валют</h1>
+        <h1>📊 Курсы валют, ставка ЦБ и прочее</h1>
         <a className="nav-link" href="#/changelog">История изменений →</a>
       </div>
       <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
@@ -189,6 +201,16 @@ function RatesApp() {
           </label>
         </div>
         <button onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить'}</button>
+      </div>
+
+      {/* Расшифровка тикеров: строка на каждый, выключенные — приглушены */}
+      <div className="tick-notes" aria-label="Пояснения по тикерам">
+        {meta.map((m) => (
+          <div key={m.code} className={picked.includes(m.code) ? 'tn-row' : 'tn-row tn-off'}>
+            <b>{LABELS[m.code] ?? m.code}</b>
+            <span>{EXPLAIN[m.code] ?? m.title}</span>
+          </div>
+        ))}
       </div>
 
       {Object.values(chartSeries).some((s) => s.length > 1) &&
