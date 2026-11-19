@@ -366,6 +366,75 @@
   background: #23233197;
 }
 
+/* курс на первое число месяца — жирным */
+.table .row-1st td {
+  font-weight: 700;
+}
+
+/* ---------- Тултип наведения на график ---------- */
+
+.chart {
+  position: relative;               /* окошко позиционируется от карточки */
+}
+
+.chart-cross {
+  stroke: #8a8aa8;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;             /* линия не перехватывает курсор */
+}
+
+/* локальные экстремумы курса в таблице: вершина — красным, яма — зелёным;
+   ▲/▼ перед числом дублирует знак для различающих цвета */
+.cell-max { color: #ff8787; font-weight: 700; }
+.cell-min { color: #69db7c; font-weight: 700; }
+
+.chart-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 176px;
+  background: #232331e6;
+  border: 1px solid #3a3a52;
+  border-radius: 10px;
+  padding: 8px 11px;
+  font-size: 0.8rem;
+  box-shadow: 0 8px 20px #00000070;
+}
+
+.chart-tip .tip-day {
+  display: block;
+  color: #9a9ab0;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+.tip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 1.5px 0;
+}
+
+.tip-row i {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.tip-row span {
+  color: #c7c7d8;
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-row b {
+  margin-left: auto;
+  color: #f2f2f7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---------- Ошибки ---------- */
 
 .error {

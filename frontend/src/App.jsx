@@ -9,7 +9,7 @@
 //   • таблица — дневные значения (source=CBR), строка = дата.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import Chart from './Chart.jsx'
+import Chart, { localExtrema } from './Chart.jsx'
 import KeyRate from './KeyRate.jsx'
 import CbrCalendar from './CbrCalendar.jsx'
 import './App.css'
@@ -124,6 +124,22 @@ export default function App() {
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]))   // свежие наверху
   }, [rates, tableCodes])
 
+  // Подсветка локальных экстремумов в таблице: свой проход localExtrema
+  // для каждой колонки (значения идут по возрастанию даты, как на графике)
+  const extCells = useMemo(() => {
+    const asc = [...byDate].reverse()
+    const out = {}
+    for (const code of tableCodes) {
+      const pts = asc
+        .map(([day, byCur]) => ({ day, v: byCur[code] }))
+        .filter((p) => p.v != null)
+      const flags = {}
+      for (const { i, type } of localExtrema(pts.map((p) => p.v))) flags[pts[i].day] = type
+      out[code] = flags
+    }
+    return out
+  }, [byDate, tableCodes])
+
   if (!meta.length) return <div className="app"><h1>Загрузка…</h1></div>
 
   return (
@@ -186,11 +202,18 @@ export default function App() {
         </thead>
         <tbody>
           {byDate.map(([day, byCur]) => (
-            <tr key={day}>
+            <tr key={day} className={day.endsWith('-01') ? 'row-1st' : undefined}>
               <td>{day}</td>
-              {tableCodes.map((c) => (
-                <td key={c}>{byCur[c] != null ? byCur[c].toFixed(2) : '—'}</td>
-              ))}
+              {tableCodes.map((c) => {
+                const ex = extCells[c]?.[day]
+                const v = byCur[c]
+                return (
+                  <td key={c} className={ex === 'max' ? 'cell-max' : ex === 'min' ? 'cell-min' : undefined}
+                      title={ex ? `локальный ${ex === 'max' ? 'максимум' : 'минимум'}` : undefined}>
+                    {v != null ? `${ex === 'max' ? '▲ ' : ex === 'min' ? '▼ ' : ''}${v.toFixed(2)}` : '—'}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>
