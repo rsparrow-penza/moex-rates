@@ -112,6 +112,14 @@ SOURCES = {
         "ticker": "BZ=F",
         "backfill_daily": True,
     },
+    "GOLD": {
+        "provider": "yahoo",
+        "title": "Золото (COMEX, $ за тройскую унцию)",
+        # ISS-металлы ММВБ снаружи недоступны, берём мировую цену: GC=F
+        "live": "https://query1.finance.yahoo.com/v8/finance/chart/GC=F",
+        "ticker": "GC=F",
+        "backfill_daily": True,
+    },
 }
 
 # Единая точка входа официального API ЦБ (не «зеркало», а сам cbr.ru).
@@ -125,6 +133,15 @@ CBR_XML_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
 # календарь заседаний на фронте (cbrMeetings.js) покрывает её целиком.
 KEY_RATE_URL = "https://www.cbr.ru/hd_base/KeyRate/"
 KEY_RATE_SINCE = "2020-01-01"   # самый первый день хранящейся истории ставки
+
+# RUONIA — на своей странице ЦБ, но без deep-истории: берём что отдаёт
+# (последние дни) и накапливаем сами.
+RUONIA_URL = "https://www.cbr.ru/hd_base/ruonia/"
+
+# Официальная годовая инфляция (ИПЦ, % к предыдущему году) по России —
+# открытый JSON Всемирного банка (агрегатор Росстата): без ключей,
+# пересчитывается раз в год. Глубина — сколько отдаёт источник (с 1990-х).
+INFLATION_URL = "https://api.worldbank.org/v2/country/RUS/indicator/FP.CPI.TOTL.ZG"
 
 HTTP_TIMEOUT = 20  # секунд: биржа иногда думает долго, вечно ждать нельзя
 
@@ -203,6 +220,30 @@ def init_db():
             CREATE TABLE IF NOT EXISTS key_rate (
                 rate_date  TEXT PRIMARY KEY,  -- '2026-11-13'
                 rate       REAL NOT NULL,     -- 14.00 (годовых, %)
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
+
+        # RUONIA: средняя ставка межбанковских кредитов в рублях. ЦБ отдаёт
+        # на странице только последнее число, поэтому ряд «откормится» сам:
+        # каждый часовой обход добавляет день-два, история копится у нас.
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ruonia (
+                rate_date  TEXT PRIMARY KEY,
+                rate       REAL NOT NULL,     -- % годовых
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
+
+        # Годовая инфляция: один ряд, один год = одна строка.
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inflation (
+                year       INTEGER PRIMARY KEY,  -- 1993..2025
+                rate       REAL NOT NULL,        -- % к предыдущему году
                 fetched_at TEXT NOT NULL
             )
             """
@@ -532,6 +573,68 @@ def backfill(currency: str, days: int = 90) -> int:
         return saved
 
 
+def fetch_ruonia() -> int:
+    """
+    RUONIA: страница ЦБ отдаёт таблицу «даты → ставка» за последние дни.
+    Даты — первой строкой, значения — в строке «Ставка RUONIA, % годовых».
+    Deep-истории у источника нет, поэтому каждый обход дописывает новые дни
+    к уже накопленным (INSERT OR REPLACE — дубли безопасны).
+    """
+    try:
+        html = http_get_xml_text(RUONIA_URL, encoding="utf-8")
+        dates = re.findall(r"<td>\s*(\d{2}\.\d{2}\.\d{4})\s*</td>", html)
+        m = re.search(r"Ставка RUONIA[^%]*%\s*годовых\s*</td>(.*?)</tr>", html, re.S)
+        if not m or not dates:
+            print("[ruonia] таблица не распознана")
+            return 0
+        values = re.findall(r"<td>\s*([\d]+,\d+)\s*</td>", m.group(1))
+        saved = 0
+        fetched_at = datetime.now().isoformat(timespec="seconds")
+        with get_db() as db:
+            for d, v in zip(dates, values):
+                dd, mm, yyyy = d.split(".")
+                db.execute(
+                    "INSERT OR REPLACE INTO ruonia (rate_date, rate, fetched_at) VALUES (?, ?, ?)",
+                    (f"{yyyy}-{mm}-{dd}", float(v.replace(",", ".")), fetched_at))
+                saved += 1
+        print(f"[ruonia] записано {saved} значений")
+        return saved
+    except Exception as e:
+        print(f"[ruonia] ошибка опроса: {e}")
+        return 0
+
+
+def fetch_inflation() -> int:
+    """
+    Годовая инфляция (ИПЦ, % к предыдущему году): открытый JSON Всемирного
+    банка по России. Формат ответа — [метаданные, [строки]], в строках
+    date=год, value=None для лет, которых ещё нет в базе. Пересчитывается
+    раз в год — часовой обход просто убеждается, что число свежее.
+    """
+    try:
+        payload = http_get_json(INFLATION_URL, params={
+            "format": "json",
+            "date": f"1990:{datetime.now(MSK).year}",
+            "per_page": 200,
+        })
+        rows = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
+        saved = 0
+        fetched_at = datetime.now().isoformat(timespec="seconds")
+        with get_db() as db:
+            for r in rows:
+                if r.get("value") is None:
+                    continue
+                db.execute(
+                    "INSERT OR REPLACE INTO inflation (year, rate, fetched_at) VALUES (?, ?, ?)",
+                    (int(r["date"]), float(r["value"]), fetched_at))
+                saved += 1
+        print(f"[inflation] записано {saved} годов")
+        return saved
+    except Exception as e:
+        print(f"[inflation] ошибка опроса: {e}")
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Планировщик: «раз в час»
 # ---------------------------------------------------------------------------
@@ -552,6 +655,8 @@ def hourly_job():
     # Ставку тоже освежаем этим же часовым обходом: страница ЦБ одна,
     # а изменение ставки — событие редкое, часовая задержка незаметна.
     fetch_key_rate()
+    fetch_ruonia()
+    fetch_inflation()
 
 
 # Переменные окружения управляются не зря:
@@ -666,6 +771,47 @@ def key_rate():
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sql = (f"SELECT rate_date, rate FROM key_rate {where_sql} "
            "ORDER BY rate_date")
+    with get_db() as db:
+        rows = db.execute(sql, params).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/ruonia", methods=["GET"])
+def ruonia():
+    """
+    GET /api/ruonia — накопленный нами дневной ряд ставки RUONIA.
+    from/to необязательные. Ряд растёт с каждого часового обхода:
+    источник отдаёт только последние дни, история — наша собственная.
+    """
+    from_ = request.args.get("from")
+    to_ = request.args.get("to")
+    where, params = [], []
+    if from_:
+        where.append("rate_date >= ?"); params.append(from_)
+    if to_:
+        where.append("rate_date <= ?"); params.append(to_)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT rate_date, rate FROM ruonia {where_sql} ORDER BY rate_date"
+    with get_db() as db:
+        rows = db.execute(sql, params).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/inflation", methods=["GET"])
+def inflation():
+    """
+    GET /api/inflation — годовая инфляция (ИПЦ, % к предыдущему году),
+    сколько есть в базе (с 1990-х). from/to — по году, необязательные.
+    """
+    from_ = request.args.get("from")
+    to_ = request.args.get("to")
+    where, params = [], []
+    if from_:
+        where.append("year >= ?"); params.append(int(from_))
+    if to_:
+        where.append("year <= ?"); params.append(int(to_))
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT year, rate FROM inflation {where_sql} ORDER BY year"
     with get_db() as db:
         rows = db.execute(sql, params).fetchall()
     return jsonify([dict(r) for r in rows])

@@ -45,14 +45,17 @@ function stepExtrema(rates) {
 
 export default function KeyRate() {
   const [points, setPoints] = useState([])
+  const [ruonia, setRuonia] = useState([])
   const [error, setError] = useState('')
 
   // Блок живёт сам по себе: обновляемся каждые 30 минут — планировщик
   // бэкенда подтягивает ставку раз в час, чаще просто нет смысла.
   useEffect(() => {
-    const load = () => fetch('/api/key-rate')
-      .then((r) => { if (!r.ok) throw new Error(`сервер ответил ${r.status}`); return r.json() })
-      .then(setPoints)
+    const load = () => Promise.all([
+      fetch('/api/key-rate').then((r) => { if (!r.ok) throw new Error(`сервер ответил ${r.status}`); return r.json() }),
+      fetch('/api/ruonia').then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    ])
+      .then(([kr, ro]) => { setPoints(kr); setRuonia(ro) })
       .catch((e) => setError(`Не удалось загрузить ставку: ${e.message}`))
     load()
     const id = setInterval(load, 30 * 60 * 1000)
@@ -143,11 +146,30 @@ export default function KeyRate() {
   // пропускаем — она видна в таблице и в тултипе точки
   .filter((l, i, arr) => i === 0 || Math.abs(l.x - arr[i - 1].x) > 16)
 
+  // RUONIA: обычная линия поверх ступенек (рынок денег против решения ЦБ).
+  // Ряд короткий — источник отдаёт только последние дни, история копится у нас
+  const ruoniaLine = ruonia.length > 1
+    ? ruonia.map((p) => `${x(stamp(p.rate_date))},${y(p.rate)}`).join(' ')
+    : null
+  const ruoniaLast = ruonia.length ? ruonia[ruonia.length - 1] : null
+
+  // Пресс-релиз ЦБ по итогам заседания — адрес публикуется по шаблону
+  // ddmm yyyy + время 13:30; у внеочередных заседаний свой формат, их не линкуем
+  const pressUrl = (iso) => {
+    const [y, m, d] = iso.split('-')
+    return `https://www.cbr.ru/press/pr/?file=${d}${m}${y}_133000key.htm`
+  }
+
   return (
     <section className="key-rate" aria-label="Ключевая ставка ЦБ РФ">
       <div className="kr-head">
         <h2>Ключевая ставка ЦБ РФ</h2>
         <div className="kr-now">
+          {ruoniaLast && (
+            <span className="kr-ruonia" title="средняя ставка однодневных межбанковских кредитов RUONIA">
+              RUONIA {fmt(ruoniaLast.rate)}% <i>({ddmm(ruoniaLast.rate_date)})</i>
+            </span>
+          )}
           <b>{fmt(last.rate)}%</b>
           <span>действует с {ddmm(since)}</span>
         </div>
@@ -185,6 +207,18 @@ export default function KeyRate() {
               <title>{`${ddmm(p.rate_date)}: ${fmt(p.prev)} → ${fmt(p.rate)}%`}</title>
             </circle>
           ))}
+          {/* RUONIA: рыночная ставка денег поверх ступенек решения ЦБ */}
+          {ruoniaLine && (
+            <>
+              <polyline points={ruoniaLine} className="kr-ruonia-line" />
+              {ruoniaLast && (
+                <circle cx={x(stamp(ruoniaLast.rate_date))} cy={y(ruoniaLast.rate)} r={3}
+                        className="kr-ruonia-dot">
+                  <title>{`RUONIA ${ddmm(ruoniaLast.rate_date)}: ${fmt(ruoniaLast.rate)}%`}</title>
+                </circle>
+              )}
+            </>
+          )}
         </svg>
 
         <div className="kr-table-wrap">
@@ -196,9 +230,16 @@ export default function KeyRate() {
               {[...meetings].reverse().map((m) => {
                 const delta = m.prev == null ? null : Math.round((m.rate - m.prev) * 100)
                 const ex = extFlags[m.date]
+                const linkable = m.date <= last.rate_date && !m.extra
                 return (
                   <tr key={m.date}>
-                    <td>{ddmm(m.date)}{m.anchor && <em className="kr-anchor">опорное</em>}</td>
+                    <td>{linkable
+                      ? <a className="kr-press" href={pressUrl(m.date)} target="_blank"
+                           rel="noopener noreferrer"
+                           title="пресс-релиз ЦБ по итогам заседания">{ddmm(m.date)}</a>
+                      : ddmm(m.date)}
+                      {m.anchor && <em className="kr-anchor">опорное</em>}
+                    </td>
                     <td className={ex === 'max' ? 'cell-max' : ex === 'min' ? 'cell-min' : undefined}
                         title={ex ? `локальный ${ex === 'max' ? 'максимум' : 'минимум'} ряда ставок` : undefined}>
                       {ex === 'max' ? '▲ ' : ex === 'min' ? '▼ ' : ''}{fmt(m.rate)}%

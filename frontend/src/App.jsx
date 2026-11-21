@@ -11,7 +11,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart, { localExtrema } from './Chart.jsx'
 import Changelog from './Changelog.jsx'
+import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
+import Inflation from './Inflation.jsx'
 import CbrCalendar from './CbrCalendar.jsx'
 import './App.css'
 
@@ -33,6 +35,7 @@ const EXPLAIN = {
   CNY_CBR: 'официальный курс ЦБ РФ по юаню: обновление раз в день',
   BTC: 'биткоин к рублю (CoinGecko): крипторынок работает 24/7, точка раз в час — непрерывная «змея»',
   BRENT: 'нефть Brent, фьючерс ICE (BZ=F): котировка в $ за баррель, дневные закрытия плюс внутридневные точки',
+  GOLD: 'золото, фьючерс COMEX (GC=F): мировая цена в $ за тройскую унцию, торги почти круглосуточно',
 }
 
 // Короткие подписи для чипов и заголовков (длинное название — в title)
@@ -40,7 +43,7 @@ const LABELS = {
   USD: 'USD', USD_OTC: 'USD·OTC', USD_CBR: 'USD·ЦБ',
   EUR: 'EUR', EUR_OTC: 'EUR·OTC', EUR_CBR: 'EUR·ЦБ',
   CNY: 'CNY', CNY_CBR: 'CNY·ЦБ',
-  BTC: 'Bitcoin ₽', BRENT: 'Brent $',
+  BTC: 'Bitcoin ₽', BRENT: 'Brent $', GOLD: 'Gold $',
 }
 
 // Биржевые серии ММВБ (фиксинги USD/EUR и спот CNY) из интерфейса убраны
@@ -164,7 +167,7 @@ function RatesApp() {
         <a className="nav-link" href="#/changelog">История изменений →</a>
       </div>
       <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
-        Bitcoin ₽ и Brent $ — активы, только график</p>
+        Bitcoin, Brent и Gold — активы, только график</p>
 
       {error && <div className="error">{error}</div>}
 
@@ -219,8 +222,14 @@ function RatesApp() {
       {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
       <KeyRate />
 
+      {/* Инфляция — естественный сосед ставки: именно она диктует решения ЦБ */}
+      <Inflation />
+
       {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
       <CbrCalendar />
+
+      {/* Справочно: траектория ставки по сценариям среднесрочного прогноза ЦБ */}
+      <CbrForecast />
 
       <table className="table">
         <thead>

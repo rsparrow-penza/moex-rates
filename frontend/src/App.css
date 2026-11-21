@@ -137,6 +137,31 @@
   margin-bottom: 16px;
 }
 
+/* RUONIA поверх ступенек: тонкая бирюзовая линия рыночной ставки денег */
+.kr-ruonia-line {
+  fill: none;
+  stroke: #63e6be;
+  stroke-width: 1.6;
+  stroke-dasharray: 1 4;
+  stroke-linecap: round;
+}
+.kr-ruonia-dot { fill: #63e6be; }
+
+.kr-ruonia {
+  color: #63e6be;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.kr-ruonia i { font-style: normal; color: #5f8f82; font-size: 0.75rem; }
+
+/* дата заседания — ссылка на пресс-релиз ЦБ */
+.kr-press {
+  color: #f2f2f7;
+  text-decoration: none;
+  border-bottom: 1px dotted #55556a;
+}
+.kr-press:hover { color: #8fa8ff; border-bottom-color: #8fa8ff; }
+
 .kr-head {
   display: flex;
   flex-wrap: wrap;
@@ -271,6 +296,15 @@
   font-weight: 600;
   color: #f2f2f7;
 }
+
+.cal-countdown {
+  color: #9a9ab0;
+  font-size: 0.85rem;
+  margin: 0 0 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #26263a;
+}
+.cal-countdown b { color: #8fa8ff; font-weight: 600; }
 
 .cal-chips {
   display: flex;
@@ -479,6 +513,129 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* ---------- Инфляция (годовой ИПЦ) ---------- */
+
+.inflation {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.inf-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.inf-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+
+.inf-now {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.inf-now b {
+  font-size: 1.6rem;
+  color: #ffa94d;
+  font-variant-numeric: tabular-nums;
+}
+
+.inf-now span { color: #9a9ab0; font-size: 0.85rem; }
+
+.inf-peak { color: #ff8787; font-size: 0.8rem; }
+
+.inf-chart { width: 100%; height: auto; }
+
+.inf-bar { fill: #f76707; opacity: 0.85; }
+.inf-bar:hover { opacity: 1; }
+.inf-bar-last { fill: #ffa94d; }
+
+.inf-grid { stroke: #2a2a38; stroke-width: 1; }
+.inf-target { stroke: #4a4a5e; stroke-width: 1; stroke-dasharray: 5 4; }
+.inf-tick { fill: #77778b; font-size: 10px; }
+.inf-year { fill: #77778b; font-size: 10px; }
+
+/* ---------- Прогноз ЦБ: траектория ставки ---------- */
+
+.cbr-forecast {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.cbr-forecast h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+
+.cf-sub {
+  color: #77778b;
+  font-size: 0.8rem;
+  margin: 0 0 10px;
+}
+
+.cf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.cf-table th {
+  color: #9a9ab0;
+  font-weight: 500;
+  text-align: right;
+  padding: 4px 8px;
+  border-bottom: 1px solid #33334a;
+}
+
+.cf-table th:first-child { text-align: left; }
+
+.cf-table td {
+  color: #f2f2f7;
+  text-align: right;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid #26263a;
+}
+
+.cf-table td:first-child { text-align: left; color: #c7c7d8; }
+
+/* базовый сценарий — тот, на который смотрит рынок */
+.cf-base td {
+  background: #223019;
+  font-weight: 600;
+}
+
+.cf-star {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: #69db7c;
+  margin-left: 8px;
+}
+
+.cf-links {
+  font-size: 0.8rem;
+  margin: 8px 0 0;
+}
+
+.cf-links a {
+  color: #8fa8ff;
+  text-decoration: none;
+}
+.cf-links a:hover { text-decoration: underline; }
 
 /* ---------- Ошибки ---------- */
 

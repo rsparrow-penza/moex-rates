@@ -294,5 +294,47 @@ class TestRatesEndpoint(unittest.TestCase):
         self.assertEqual(len(self.client.get("/api/rates?currencies=ZWL").json), 5)
 
 
+# Всемирный банк: [мета, строки]; строка = {date: 'Год', value: % или None}
+MOCK_WB = [
+    {"page": 1, "pages": 1, "total": 4},
+    [
+        {"date": "2025", "value": 8.7},
+        {"date": "2024", "value": 8.486},
+        {"date": "2026", "value": None},        # год ещё не закрыт
+        {"date": "1993", "value": 874.2},
+    ],
+]
+
+
+class TestInflation(unittest.TestCase):
+
+    def setUp(self):
+        with rates.get_db() as db:
+            db.execute("DELETE FROM inflation")
+
+    def test_parse_skips_empty_values(self):
+        """None-значения (текущий год) не пишутся; остальные — год и %."""
+        with mock.patch.object(rates, "http_get_json", return_value=MOCK_WB):
+            self.assertEqual(rates.fetch_inflation(), 3)
+        with rates.get_db() as db:
+            rows = {r["year"]: r["rate"] for r in
+                    db.execute("SELECT year, rate FROM inflation")}
+        self.assertEqual(rows, {2025: 8.7, 2024: 8.486, 1993: 874.2})
+
+    def test_second_run_replaces_not_duplicates(self):
+        with mock.patch.object(rates, "http_get_json", return_value=MOCK_WB):
+            rates.fetch_inflation()
+            self.assertEqual(rates.fetch_inflation(), 3)     # повтор безопасен
+        with rates.get_db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) n FROM inflation").fetchone()["n"], 3)
+
+    def test_endpoint_ascending_and_filtered(self):
+        with mock.patch.object(rates, "http_get_json", return_value=MOCK_WB):
+            rates.fetch_inflation()
+        rows = rates.app.test_client().get("/api/inflation").json
+        self.assertEqual([r["year"] for r in rows], [1993, 2024, 2025])
+        self.assertEqual(len(rates.app.test_client().get("/api/inflation?from=2000").json), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

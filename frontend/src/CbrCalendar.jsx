@@ -5,6 +5,7 @@
 // статично — на новый год достаточно добавить следующий массив. При смене
 // года, пока нового массива нет, блок просто не показываем.
 
+import { useEffect, useState } from 'react'
 import { MEETINGS } from './cbrMeetings.js'
 
 const ddmm = (iso) => {
@@ -22,6 +23,13 @@ const todayMs = () => {
 }
 
 export default function CbrCalendar() {
+  // Тикаем раз в минуту: «до решения осталось…» — хуки до любых return!
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const year = Number(todayMs().slice(0, 4))
   const meetings = MEETINGS[year]
   if (!meetings) return null
@@ -29,9 +37,30 @@ export default function CbrCalendar() {
   const today = todayMs()
   const next = meetings.find((m) => m.date >= today)
 
+  // Обратный отсчёт до публикации решения (13:30 МСК дня заседания)
+  let countdown = null
+  if (next) {
+    const decision = new Date(`${next.date}T13:30:00+03:00`).getTime()
+    const ms = decision - now
+    if (ms > 0) {
+      const d = Math.floor(ms / 86400000)
+      const h = Math.floor((ms % 86400000) / 3600000)
+      const min = Math.floor((ms % 3600000) / 60000)
+      countdown = d > 0 ? `через ${d} дн ${h} ч` : h > 0 ? `через ${h} ч ${min} мин` : `через ${min} мин`
+    } else if (next.date === today) {
+      countdown = 'решение сегодня в 13:30'
+    }
+  }
+
   return (
     <section className="cbr-cal" aria-label="График заседаний ЦБ РФ">
       <h2>📅 Заседания ЦБ по ключевой ставке — {year}</h2>
+      {next && (
+        <p className="cal-countdown">
+          ⏳ Следующее заседание — <b>{ddmm(next.date)}</b>
+          {next.anchor ? ' (опорное)' : ''}, решение в 13:30 МСК{countdown ? `: ${countdown}` : ''}
+        </p>
+      )}
       <div className="cal-chips">
         {meetings.map((m) => {
           const isNext = next && m.date === next.date
