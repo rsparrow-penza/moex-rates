@@ -114,6 +114,16 @@ function RatesApp() {
       (a.rate_date + a.rate_time).localeCompare(b.rate_date + b.rate_time))
     const byCode = {}
     for (const r of sorted) (byCode[r.currency] ||= []).push(r)
+    // Дневную закрытку убираем из дня, где есть внутридневные тики:
+    // дневная свеча Yahoo датирована началом сессии (вечер ET = наши утро/ночь),
+    // и вперемешку с 15-минутками она рисовала «пилу» ±3% на границах суток.
+    // В старом диапазоне, где минут нет, закрытия остаются единственной точкой.
+    for (const code of Object.keys(byCode)) {
+      const rows = byCode[code]
+      const timedDays = new Set(rows.filter((r) => r.rate_time).map((r) => r.rate_date))
+      if (timedDays.size)
+        byCode[code] = rows.filter((r) => r.rate_time || !timedDays.has(r.rate_date))
+    }
     return byCode
   }, [rates])
 
