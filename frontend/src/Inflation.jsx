@@ -6,7 +6,7 @@
 // от всех остальных лет тонкую полоску у нуля, а лог-шкала честно
 // показывает порядок величины каждый год.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const W = 720
 const H = 190
@@ -17,6 +17,9 @@ const fmt = (n) => n.toFixed(1).replace('.', ',')
 export default function Inflation() {
   const [years, setYears] = useState([])
   const [error, setError] = useState('')
+  // всплывающее значение под курсором при наведении на столбик
+  const [tip, setTip] = useState(null)
+  const boxRef = useRef(null)
 
   useEffect(() => {
     const load = () => fetch('/api/inflation')
@@ -56,8 +59,24 @@ export default function Inflation() {
   // подписи лет: каждый пятый год и последний
   const xLabels = years.filter((yr, i) => (Number(yr.year) % 5 === 0) || yr === last)
 
+  // тултип показываем над верхушкой столбика: viewBox-координаты пересчитываем
+  // в пиксели по масштабу svg, координаты svg — в координаты карточки
+  function showTip(e, yr, i) {
+    const svg = e.currentTarget.ownerSVGElement
+    const sr = svg.getBoundingClientRect()
+    const cr = boxRef.current.getBoundingClientRect()
+    const k = sr.width / W
+    const topPx = sr.top - cr.top + y(yr.rate) * k
+    const xPx = sr.left - cr.left + x(i) * k
+    setTip({
+      year: yr.year, rate: yr.rate,
+      left: Math.min(Math.max(xPx - 44, 4), cr.width - 96),
+      top: Math.max(topPx - 34, 2),
+    })
+  }
+
   return (
-    <section className="inflation" aria-label="Официальная инфляция в России">
+    <section className="inflation" aria-label="Официальная инфляция в России" ref={boxRef}>
       <div className="inf-head">
         <h2>📈 Инфляция в России, % к предыдущему году</h2>
         <div className="inf-now">
@@ -84,15 +103,21 @@ export default function Inflation() {
                 x={x(i) - bw / 2} width={bw}
                 y={y(yr.rate)} height={Math.max(H - PAD.bottom - y(yr.rate), 1)}
                 className={yr === last ? 'inf-bar inf-bar-last' : 'inf-bar'}
-                rx={1.5}>
-            <title>{`${yr.year}: ${fmt(yr.rate)}%`}</title>
-          </rect>
+                rx={1.5}
+                aria-label={`${yr.year}: ${fmt(yr.rate)}%`}
+                onMouseMove={(e) => showTip(e, yr, i)}
+                onMouseLeave={() => setTip(null)} />
         ))}
         {xLabels.map((yr) => (
           <text key={`l${yr.year}`} x={x(years.indexOf(yr))} y={H - 6}
                 textAnchor="middle" className="inf-year">{yr.year}</text>
         ))}
       </svg>
+      {tip && (
+        <div className="inf-tip" style={{ left: tip.left, top: tip.top }}>
+          <b>{tip.year}</b> · {fmt(tip.rate)}%
+        </div>
+      )}
 
       <p className="hint">
         Росстат (годовой ИПЦ), шкала логарифмическая — иначе 1993-й сплющил бы всё остальное.

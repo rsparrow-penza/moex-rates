@@ -521,7 +521,26 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   border-radius: 14px;
   padding: 16px 18px;
   margin-bottom: 16px;
+  position: relative;                 /* точка отсчёта для всплывающего значения */
 }
+
+/* значение года под курсором над столбиком */
+.inf-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: #232331e6;
+  border: 1px solid #3a3a52;
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 0.8rem;
+  color: #f2f2f7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 6px 16px #00000060;
+}
+
+.inf-tip b { color: #ffa94d; }
 
 .inf-head {
   display: flex;
