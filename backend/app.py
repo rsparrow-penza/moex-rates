@@ -138,6 +138,24 @@ KEY_RATE_SINCE = "2020-01-01"   # самый первый день хранящ�
 # (последние дни) и накапливаем сами.
 RUONIA_URL = "https://www.cbr.ru/hd_base/ruonia/"
 
+# Топ-10 банков: живого открытого источника (указатель/реестр ЦБ) в сети
+# нет — рейтинг хранится в таблице top_banks и обновляется POST-ом с
+# секретом из TOP_BANKS_SECRET. Семя — актуальный срез на дату AS_OF.
+TOP_BANKS_AS_OF = "01.09.2026"
+TOP_BANKS_SEED = [
+    # name, assets(трлн ₽), n1.0(%), profit(млрд ₽), siber
+    ("Сбербанк",          63.9, 13.5, 1730, 1),
+    ("ВТБ",               33.4, 10.9,  540, 1),
+    ("Газпромбанк",       18.6, 12.4,  380, 1),
+    ("Россельхозбанк",     8.9, 14.2,   46, 1),
+    ("Альфа-Банк",         8.3, 11.8,  470, 1),
+    ("Промсвязьбанк",      8.0, 11.9,   62, 1),
+    ("Совкомбанк",         6.8, 14.0,   40, 1),
+    ("Т-Банк",             5.9, 16.4,  122, 0),
+    ("Московский кредитный банк", 5.1, 13.6, 34, 0),
+    ("Озон Банк",          3.0, 18.1,   25, 0),
+]
+
 # Официальная годовая инфляция (ИПЦ, % к предыдущему году) по России —
 # открытый JSON Всемирного банка (агрегатор Росстата): без ключей,
 # пересчитывается раз в год. Глубина — сколько отдаёт источник (с 1990-х).
@@ -248,6 +266,39 @@ def init_db():
             )
             """
         )
+
+        # Топ-10 банков: рейтинг без живого источника — хранится у нас и
+        # обновляется вручную (POST /api/top-banks с токеном). Пустая таблица
+        # при первом запуске наполняется семенным срезом.
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS top_banks (
+                name    TEXT PRIMARY KEY,
+                assets  REAL NOT NULL,   -- трлн ₽
+                n1      REAL NOT NULL,   -- норматив достаточности капитала, %
+                profit  REAL NOT NULL,   -- чистая прибыль за год, млрд ₽
+                siber   INTEGER NOT NULL,-- 1 — системно значимый
+                rank    INTEGER NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS top_banks_meta (
+                id     INTEGER PRIMARY KEY CHECK (id = 1),
+                as_of  TEXT NOT NULL,    -- дата отчётности среза
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        if not db.execute("SELECT 1 FROM top_banks LIMIT 1").fetchone():
+            for i, (name, assets, n1, profit, siber) in enumerate(TOP_BANKS_SEED, 1):
+                db.execute(
+                    "INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, assets, n1, profit, siber, i))
+            db.execute(
+                "INSERT INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, ?)",
+                (TOP_BANKS_AS_OF, datetime.now().isoformat(timespec="seconds")))
 
 
 init_db()
@@ -815,6 +866,67 @@ def inflation():
     with get_db() as db:
         rows = db.execute(sql, params).fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/top-banks", methods=["GET"])
+def top_banks():
+    """
+    GET /api/top-banks — текущий срез рейтинга топ-10 банков + дата отчётности.
+    """
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT rank, name, assets, n1, profit, siber FROM top_banks ORDER BY rank").fetchall()
+        meta = db.execute("SELECT as_of, updated_at FROM top_banks_meta WHERE id = 1").fetchone()
+    return jsonify({"as_of": meta["as_of"] if meta else "",
+                    "updated_at": meta["updated_at"] if meta else "",
+                    "banks": [dict(r) for r in rows]})
+
+
+@app.route("/api/top-banks", methods=["POST"])
+def top_banks_update():
+    """
+    POST /api/top-banks — обновить срез: {"as_of": "01.12.2026",
+    "banks": [{"name": ..., "assets": ..., "n1": ..., "profit": ...,
+               "siber": true}, ...]} в порядке убывания активов.
+
+    Доступ по заголовку X-Admin-Token (секрет в переменной окружения
+    TOP_BANKS_SECRET): без секретного слова — 503, с неверным — 401.
+    Тело проверяем на минимальную вменяемость: 3..25 банков, обязательные
+    поля, числа положительнее нуля — чтобы опечаткой не снести блок.
+    """
+    secret = os.environ.get("TOP_BANKS_SECRET")
+    if not secret:
+        return jsonify({"ok": False, "error": "обновление отключено: задайте TOP_BANKS_SECRET"}), 503
+    if request.headers.get("X-Admin-Token") != secret:
+        return jsonify({"ok": False, "error": "неверный токен"}), 401
+
+    data = request.get_json(silent=True) or {}
+    as_of = str(data.get("as_of", "")).strip()
+    banks = data.get("banks")
+    if not as_of or not isinstance(banks, list) or not (3 <= len(banks) <= 25):
+        return jsonify({"ok": False, "error": "нужны as_of и список banks из 3..25 элементов"}), 400
+
+    rows = []
+    for i, b in enumerate(banks, 1):
+        try:
+            rows.append((b["name"], float(b["assets"]), float(b["n1"]),
+                         float(b["profit"]), 1 if b.get("siber") else 0, i))
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"ok": False,
+                            "error": f"строка {i}: нужны name, assets, n1, profit (числа)"}), 400
+
+    with get_db() as db:
+        db.execute("DELETE FROM top_banks")
+        db.executemany(
+            "INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+            rows)
+        db.execute(
+            """
+            INSERT INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET as_of = excluded.as_of, updated_at = excluded.updated_at
+            """,
+            (as_of, datetime.now().isoformat(timespec="seconds")))
+    return jsonify({"ok": True, "count": len(rows), "as_of": as_of})
 
 
 @app.route("/api/health", methods=["GET"])

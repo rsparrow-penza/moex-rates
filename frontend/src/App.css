@@ -666,6 +666,66 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   margin: 12px 0;
 }
 
+/* ---------- Топ-10 банков ---------- */
+
+.top-banks {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.top-banks h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+
+.tb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.tb-table th {
+  color: #9a9ab0;
+  font-weight: 500;
+  text-align: right;
+  padding: 4px 8px;
+  border-bottom: 1px solid #33334a;
+}
+
+.tb-table th:nth-child(1), .tb-table th:nth-child(2) { text-align: left; }
+
+.tb-table td {
+  color: #f2f2f7;
+  text-align: right;
+  padding: 6px 8px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid #26263a;
+}
+
+.tb-table tbody tr:hover { background: #23233197; }
+
+.tb-num { color: #77778b; width: 24px; }
+
+.tb-table td:nth-child(2) { text-align: left; color: #f2f2f7; }
+
+.tb-ticker {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: #55556a;
+  margin-left: 8px;
+}
+
+.tb-assets { font-weight: 600; }
+
+.tb-n1 { color: #c7c7d8; }
+.tb-n1-strong { color: #69db7c; }
+
+.tb-siber { color: #8fd3c7; text-align: center !important; }
+
 /* ---------- Страница «История изменений» ---------- */
 
 .changelog {

@@ -257,6 +257,61 @@ class TestCbr(unittest.TestCase):
             self.assertEqual(rates.backfill("EUR_CBR"), 0)
 
 
+class TestTopBanks(unittest.TestCase):
+    """Рейтинг банков: семя при первом запуске + охраняемый секретом POST."""
+
+    def setUp(self):
+        os.environ["TOP_BANKS_SECRET"] = "test-secret"
+        # каждый тест стартует с семенного среза: методы выполняются по
+        # алфавиту, и test_post_* иначе «съедает» рейтинг у test_seeded_*
+        with rates.get_db() as db:
+            db.execute("DELETE FROM top_banks")
+            for i, (name, assets, n1, profit, siber) in enumerate(rates.TOP_BANKS_SEED, 1):
+                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+                           (name, assets, n1, profit, siber, i))
+            db.execute("INSERT OR REPLACE INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, 'x')",
+                       (rates.TOP_BANKS_AS_OF,))
+        self.client = rates.app.test_client()
+
+    def tearDown(self):
+        os.environ.pop("TOP_BANKS_SECRET", None)
+
+    def test_seeded_and_ordered(self):
+        body = self.client.get("/api/top-banks").json
+        self.assertEqual(len(body["banks"]), 10)
+        self.assertEqual(body["banks"][0]["name"], "Сбербанк")
+        self.assertEqual([b["rank"] for b in body["banks"]], list(range(1, 11)))
+        self.assertTrue(body["as_of"])
+
+    def test_post_requires_secret_and_token(self):
+        r = self.client.post("/api/top-banks", json={"as_of": "x", "banks": []})
+        self.assertEqual(r.status_code, 401)                 # секрет задан, токен неверный
+        os.environ.pop("TOP_BANKS_SECRET")
+        r = self.client.post("/api/top-banks", json={})
+        self.assertEqual(r.status_code, 503)                 # обновление выключено
+
+    def test_post_rejects_garbage(self):
+        h = {"X-Admin-Token": "test-secret"}
+        self.assertEqual(self.client.post("/api/top-banks", json={"as_of": "01.12.2026",
+                                                                  "banks": [{"name": "X"}]},
+                                          headers=h).status_code, 400)   # слишком короткий список
+        self.assertEqual(self.client.post("/api/top-banks", json={"banks": []},
+                                          headers=h).status_code, 400)   # нет as_of
+
+    def test_post_replaces_snapshot(self):
+        new = {"as_of": "01.12.2026", "banks": [
+            {"name": "Банк А", "assets": 10.5, "n1": 12.0, "profit": 100, "siber": True},
+            {"name": "Банк Б", "assets": 9.0,  "n1": 11.0, "profit": 90},
+            {"name": "Банк В", "assets": 8.0,  "n1": 10.0, "profit": 80},
+        ]}
+        r = self.client.post("/api/top-banks", json=new, headers={"X-Admin-Token": "test-secret"})
+        self.assertTrue(r.json["ok"])
+        body = self.client.get("/api/top-banks").json
+        self.assertEqual(body["as_of"], "01.12.2026")
+        self.assertEqual([b["name"] for b in body["banks"]], ["Банк А", "Банк Б", "Банк В"])
+        self.assertEqual(body["banks"][2]["rank"], 3)
+
+
 class TestRatesEndpoint(unittest.TestCase):
     """Фильтрация по диапазону дат и валютам — то, что делает фронт."""
 
