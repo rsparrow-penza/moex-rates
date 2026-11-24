@@ -281,8 +281,13 @@ class TestTopBanks(unittest.TestCase):
         with rates.get_db() as db:
             db.execute("DELETE FROM top_banks")
             for i, (name, assets, n1, profit, siber) in enumerate(rates.TOP_BANKS_SEED, 1):
-                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp)"
+                           " VALUES (?, ?, ?, ?, ?, ?, 'top')",
                            (name, assets, n1, profit, siber, i))
+            for i, (name, assets, n1, profit, siber, place) in enumerate(rates.TOP_BANKS_EXTRA, 1):
+                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
+                           " VALUES (?, ?, ?, ?, ?, ?, 'extra', ?)",
+                           (name, assets, n1, profit, siber, i, place))
             db.execute("INSERT OR REPLACE INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, 'x')",
                        (rates.TOP_BANKS_AS_OF,))
         self.client = rates.app.test_client()
@@ -292,10 +297,20 @@ class TestTopBanks(unittest.TestCase):
 
     def test_seeded_and_ordered(self):
         body = self.client.get("/api/top-banks").json
-        self.assertEqual(len(body["banks"]), 10)
-        self.assertEqual(body["banks"][0]["name"], "Сбербанк")
-        self.assertEqual([b["rank"] for b in body["banks"]], list(range(1, 11)))
+        top = [b for b in body["banks"] if b["grp"] == "top"]
+        self.assertEqual(len(top), 10)
+        self.assertEqual(top[0]["name"], "Сбербанк")
+        self.assertEqual([b["rank"] for b in top], list(range(1, 11)))
         self.assertTrue(body["as_of"])
+
+    def test_extra_seeded(self):
+        body = self.client.get("/api/top-banks").json
+        extra = [b for b in body["banks"] if b["grp"] == "extra"]
+        self.assertEqual([b["name"] for b in extra],
+                         ["Новикомбанк", "ББР", "Хлынов", "Кузнецкий"])
+        self.assertEqual(extra[0]["place"], 13)          # место по активам в РФ
+        self.assertEqual(extra[3]["place"], 169)
+        self.assertLess(extra[3]["profit"], 0)           # Кузнецкий — убыток
 
     def test_post_requires_secret_and_token(self):
         r = self.client.post("/api/top-banks", json={"as_of": "x", "banks": []})
@@ -311,6 +326,12 @@ class TestTopBanks(unittest.TestCase):
                                           headers=h).status_code, 400)   # слишком короткий список
         self.assertEqual(self.client.post("/api/top-banks", json={"banks": []},
                                           headers=h).status_code, 400)   # нет as_of
+        bad = {"as_of": "01.12.2026", "banks": [
+            {"name": "А", "assets": 1, "n1": 1, "profit": 1},
+            {"name": "Б", "assets": 1, "n1": 1, "profit": 1, "grp": "bogus"},
+            {"name": "В", "assets": 1, "n1": 1, "profit": 1}]}
+        self.assertEqual(self.client.post("/api/top-banks", json=bad,
+                                          headers=h).status_code, 400)   # неизвестная grp
 
     def test_post_replaces_snapshot(self):
         new = {"as_of": "01.12.2026", "banks": [

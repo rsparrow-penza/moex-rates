@@ -156,6 +156,18 @@ TOP_BANKS_SEED = [
     ("Озон Банк",          3.0, 18.1,   25, 0),
 ]
 
+# Вторая группа «избранные банки» — не рейтинг, а срез, который смотрим
+# сами: Новиком, ББР, Хлынов, Кузнецкий. Цифры с карточек banki.ru
+# (отчётность на 01.09.2026), место — по активам в РФ. n1 = 0 означает
+# «нет данных» — фронт показывает прочерк.
+TOP_BANKS_EXTRA = [
+    # name, assets(трлн ₽), n1.0(%), profit(млрд ₽), siber, place
+    ("Новикомбанк",    1.6,   0, 18.0,  0, 13),
+    ("ББР",            0.207, 0,  1.2,  0, 43),
+    ("Хлынов",         0.052, 0,  0.766, 0, 95),
+    ("Кузнецкий",      0.011, 0, -0.044, 0, 169),
+]
+
 # Официальная годовая инфляция (ИПЦ, % к предыдущему году) по России —
 # открытый JSON Всемирного банка (агрегатор Росстата): без ключей,
 # пересчитывается раз в год. Глубина — сколько отдаёт источник (с 1990-х).
@@ -284,19 +296,29 @@ def init_db():
 
         # Топ-10 банков: рейтинг без живого источника — хранится у нас и
         # обновляется вручную (POST /api/top-banks с токеном). Пустая таблица
-        # при первом запуске наполняется семенным срезом.
+        # при первом запуске наполняется семенным срезом. grp различает
+        # рейтинг ('top') и избранную четвёрку ('extra'), place — место по
+        # активам в РФ (знаем для extras, для топ-10 это и есть rank).
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS top_banks (
                 name    TEXT PRIMARY KEY,
                 assets  REAL NOT NULL,   -- трлн ₽
-                n1      REAL NOT NULL,   -- норматив достаточности капитала, %
+                n1      REAL NOT NULL,   -- норматив достаточности капитала, % (0 = нет данных)
                 profit  REAL NOT NULL,   -- чистая прибыль за год, млрд ₽
                 siber   INTEGER NOT NULL,-- 1 — системно значимый
-                rank    INTEGER NOT NULL
+                rank    INTEGER NOT NULL,
+                grp     TEXT NOT NULL DEFAULT 'top',
+                place   INTEGER          -- место по активам в РФ (для extras)
             )
             """
         )
+        # Миграция старой схемы (без grp/place): SQLite добавит колонки с значениями по умолчанию.
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(top_banks)")]
+        if "grp" not in cols:
+            db.execute("ALTER TABLE top_banks ADD COLUMN grp TEXT NOT NULL DEFAULT 'top'")
+        if "place" not in cols:
+            db.execute("ALTER TABLE top_banks ADD COLUMN place INTEGER")
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS top_banks_meta (
@@ -306,14 +328,21 @@ def init_db():
             )
             """
         )
-        if not db.execute("SELECT 1 FROM top_banks LIMIT 1").fetchone():
+        if not db.execute("SELECT 1 FROM top_banks WHERE grp = 'top' LIMIT 1").fetchone():
             for i, (name, assets, n1, profit, siber) in enumerate(TOP_BANKS_SEED, 1):
                 db.execute(
-                    "INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 'top')",
                     (name, assets, n1, profit, siber, i))
             db.execute(
                 "INSERT INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, ?)",
                 (TOP_BANKS_AS_OF, datetime.now().isoformat(timespec="seconds")))
+        if not db.execute("SELECT 1 FROM top_banks WHERE grp = 'extra' LIMIT 1").fetchone():
+            for i, (name, assets, n1, profit, siber, place) in enumerate(TOP_BANKS_EXTRA, 1):
+                db.execute(
+                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 'extra', ?)",
+                    (name, assets, n1, profit, siber, i, place))
 
 
 init_db()
@@ -886,11 +915,13 @@ def inflation():
 @app.route("/api/top-banks", methods=["GET"])
 def top_banks():
     """
-    GET /api/top-banks — текущий срез рейтинга топ-10 банков + дата отчётности.
+    GET /api/top-banks — текущий срез рейтинга топ-10 и избранной четвёрки
+    (grp='extra', с place — местом по активам в РФ) + дата отчётности.
     """
     with get_db() as db:
         rows = db.execute(
-            "SELECT rank, name, assets, n1, profit, siber FROM top_banks ORDER BY rank").fetchall()
+            "SELECT rank, name, assets, n1, profit, siber, grp, place"
+            " FROM top_banks ORDER BY grp DESC, rank").fetchall()
         meta = db.execute("SELECT as_of, updated_at FROM top_banks_meta WHERE id = 1").fetchone()
     return jsonify({"as_of": meta["as_of"] if meta else "",
                     "updated_at": meta["updated_at"] if meta else "",
@@ -902,12 +933,14 @@ def top_banks_update():
     """
     POST /api/top-banks — обновить срез: {"as_of": "01.12.2026",
     "banks": [{"name": ..., "assets": ..., "n1": ..., "profit": ...,
-               "siber": true}, ...]} в порядке убывания активов.
+               "siber": true, "grp": "top"|"extra", "place": 13}, ...]}
+    в порядке убывания активов; grp и place необязательные (по умолчанию
+    'top' и null). rank проставляется сам — порядком внутри группы.
 
     Доступ по заголовку X-Admin-Token (секрет в переменной окружения
     TOP_BANKS_SECRET): без секретного слова — 503, с неверным — 401.
     Тело проверяем на минимальную вменяемость: 3..25 банков, обязательные
-    поля, числа положительнее нуля — чтобы опечаткой не снести блок.
+    поля, активы и капитал числами — чтобы опечаткой не снести блок.
     """
     secret = os.environ.get("TOP_BANKS_SECRET")
     if not secret:
@@ -922,10 +955,16 @@ def top_banks_update():
         return jsonify({"ok": False, "error": "нужны as_of и список banks из 3..25 элементов"}), 400
 
     rows = []
+    seen = {"top": 0, "extra": 0}
     for i, b in enumerate(banks, 1):
+        grp = b.get("grp", "top")
+        if grp not in ("top", "extra"):
+            return jsonify({"ok": False, "error": f"строка {i}: grp должен быть top или extra"}), 400
         try:
+            seen[grp] += 1
             rows.append((b["name"], float(b["assets"]), float(b["n1"]),
-                         float(b["profit"]), 1 if b.get("siber") else 0, i))
+                         float(b["profit"]), 1 if b.get("siber") else 0,
+                         seen[grp], grp, b.get("place")))
         except (KeyError, TypeError, ValueError):
             return jsonify({"ok": False,
                             "error": f"строка {i}: нужны name, assets, n1, profit (числа)"}), 400
@@ -933,7 +972,8 @@ def top_banks_update():
     with get_db() as db:
         db.execute("DELETE FROM top_banks")
         db.executemany(
-            "INSERT INTO top_banks (name, assets, n1, profit, siber, rank) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             rows)
         db.execute(
             """

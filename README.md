@@ -115,7 +115,7 @@ docker compose up -d --build
 | GET | `/api/key-rate?from=&to=` | дневной ряд ключевой ставки ЦБ (с 2020 года) |
 | GET | `/api/ruonia` | накопленный ряд ставки RUONIA |
 | GET | `/api/inflation?from=&to=` | годовая инфляция (ИПЦ), с 1993 года |
-| GET | `/api/top-banks` | текущий срез топ-10 банков + дата отчётности |
+| GET | `/api/top-banks` | топ-10 (grp='top') и избранные банки (grp='extra', с place) + дата отчётности |
 | POST | `/api/top-banks` | заменить срез рейтинга банков (заголовок `X-Admin-Token`, секрет `TOP_BANKS_SECRET`) |
 | GET | `/api/health` | число записей и время последнего обновления |
 
@@ -126,7 +126,9 @@ docker compose up -d --build
 
 ```bash
 # banks.json: {"as_of": "01.12.2026", "banks": [{"name": "Сбербанк", "assets": 63.9,
-#              "n1": 13.5, "profit": 1730, "siber": true}, ...]}
+#              "n1": 13.5, "profit": 1730, "siber": true,
+#              "grp": "top"|"extra", "place": 13}, ...]}
+# rank проставляется сам по порядку внутри группы; grp по умолчанию 'top'.
 TOP_BANKS_SECRET=<секрет> TOP_BANKS_URL=http://<IP>:8080 \
     python3 backend/update_top_banks.py banks.json
 ```

@@ -726,6 +726,15 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 
 .tb-siber { color: #8fd3c7; text-align: center !important; }
 
+.tb-extra-title {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+  color: #b9b9cc;
+}
+
+/* убыток банка — как падающий курс, красным */
+.tb-table td.tb-loss { color: #ff6b6b; }
+
 /* ---------- Страница «История изменений» ---------- */
 
 .changelog {
