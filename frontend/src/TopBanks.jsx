@@ -164,16 +164,16 @@ export default function TopBanks() {
   const top = data.banks.filter((b) => b.grp !== 'extra')
   const extra = data.banks.filter((b) => b.grp === 'extra')
 
-  // колонки общие у обеих таблиц — различается только первая (# / Место)
+  // колонки общие у обеих таблиц — различается только первая (# / Место).
+  // Подсказка по наведению остаётся полной, в заголовке — короткая метка.
   const metricCols = (
     <>
-      <Th metric="assets">Активы, ₽</Th>
-      <Th metric="n1">N1.0, %</Th>
-      <Th metric="cap123">Капитал ф.123</Th>
-      <Th metric="vkl_fiz">Вклады физлиц</Th>
-      <Th metric="sred_org">Средства орг.</Th>
-      <Th metric="profit">Прибыль с начала года</Th>
-      <Th metric="siber">СИ</Th>
+      <Th metric="assets">Активы</Th>
+      <Th metric="n1">N1.0</Th>
+      <Th metric="cap123">Капитал</Th>
+      <Th metric="vkl_fiz">Вклады</Th>
+      <Th metric="sred_org">Ср-ва орг.</Th>
+      <Th metric="profit">Прибыль</Th>
     </>
   )
 
@@ -188,7 +188,6 @@ export default function TopBanks() {
       <td className="tb-dep">{fmtTrln(b.vkl_fiz)}</td>
       <td className="tb-dep">{fmtTrln(b.sred_org)}</td>
       <td className={loss ? 'tb-loss' : ''}>{fmtProfit(b.profit)}</td>
-      <td className="tb-siber">{b.siber ? '✓' : ''}</td>
     </>
   )
 
@@ -263,8 +262,10 @@ export default function TopBanks() {
           активы нетто по ЦБ ~1 трлн ₽, а по МСФО группы — около 3 трлн. ЦБ
           выкладывает формы примерно через месяц после отчётной даты. ПСБ форму
           0409101 не публикует — поэтому активов, вкладов и средств организаций
-          у него нет, прочерк. Топ-10 и избранные банки обновляются одним
-          срезом через /api/top-banks (POST с токеном).
+          у него нет, прочерк. Колонку «СИ» убрали: системно значимые банки
+          сейчас почти весь топ-10, вне перечня только Т-Банк и Ozon Банк.
+          Топ-10 и избранные банки обновляются одним срезом через /api/top-banks
+          (POST с токеном).
         </p>
       </details>
     </section>

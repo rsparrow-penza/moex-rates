@@ -673,8 +673,8 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   border-radius: 14px;
   padding: 14px 18px;
   margin-bottom: 16px;
-  overflow-x: auto;          /* колонок стало 9: на узких экранах таблица
-                                скроллится по горизонтали, а не режется */
+  overflow-x: auto;          /* на совсем узких экранах таблица скроллится
+                                по горизонтали, а не режется */
 }
 
 .top-banks h2 {
@@ -686,17 +686,16 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 
 .tb-table {
   width: 100%;
-  min-width: 900px;
   border-collapse: collapse;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
 }
 
 .tb-table th {
   color: #9a9ab0;
   font-weight: 500;
   text-align: right;
-  padding: 4px 7px;
-  font-size: 0.78rem;
+  padding: 4px 8px 4px 5px;   /* справа — местечко под надстрочный «i» */
+  font-size: 0.75rem;
   border-bottom: 1px solid #33334a;
 }
 
@@ -705,7 +704,7 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .tb-table td {
   color: #f2f2f7;
   text-align: right;
-  padding: 6px 8px;
+  padding: 6px 5px;
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid #26263a;
 }
@@ -789,19 +788,30 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .tb-th-tip {
   position: relative;
   cursor: help;
-  white-space: nowrap;
+  white-space: nowrap;   /* заголовки колонок — всегда в одну строку */
 }
 .tb-th-tip:focus-visible { outline: 1px dashed #55556a; outline-offset: 2px; }
 
-.tb-tip-dot { color: #55556a; font-size: 0.72rem; margin-left: 4px; }
+/* маркер подсказки — надстрочная «i» справа от короткой подписи,
+   чтобы не расширять колонку */
+.tb-tip-dot {
+  position: absolute;
+  top: 1px;
+  right: -1px;
+  color: #55556a;
+  font-size: 0.62rem;
+  line-height: 1;
+}
 
 .tb-th-tip::after {
   content: attr(data-tip);
+  display: none;           /* не display-ни в потоке: скрытая подсказка
+                              не должна расширять scrollWidth секции */
   position: absolute;
   top: calc(100% + 6px);
   left: 50%;
   width: min(340px, 68vw);
-  transform: translateX(-50%) translateY(-4px);
+  transform: translateX(-50%);
   background: #2a2a3c;
   color: #f2f2f7;
   border: 1px solid #3d3d55;
@@ -815,28 +825,22 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   letter-spacing: normal;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+  transition: opacity 0.16s ease;
   z-index: 30;
   pointer-events: none;
 }
 .tb-th-tip:hover::after, .tb-th-tip:focus-visible::after {
+  display: block;
   opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
 }
 /* крайние колонки — подсказку не обрезать за краем таблицы */
-.tb-table th.tb-th-tip:last-child::after { left: auto; right: 0; transform: translateY(-4px); }
+.tb-table th.tb-th-tip:last-child::after { left: auto; right: 0; }
 /* подсказка упирается в край экрана — подворачиваем к центру колонки
    (классы навешивает JS в TopBanks.jsx на mouseenter/focus) */
 .tb-th-tip.tb-tip-align-left { text-align: left; }
-.tb-th-tip.tb-tip-align-left::after { left: 0; transform: translateX(0) translateY(-4px); }
-.tb-th-tip.tb-tip-align-left:hover::after,
-.tb-th-tip.tb-tip-align-left:focus-visible::after { transform: translateX(0) translateY(0); }
+.tb-th-tip.tb-tip-align-left::after { left: 0; transform: translateX(0); }
 .tb-th-tip.tb-tip-align-right { text-align: right; }
-.tb-th-tip.tb-tip-align-right::after { left: auto; right: 0; transform: translateX(0) translateY(-4px); }
-.tb-th-tip.tb-tip-align-right:hover::after,
-.tb-th-tip.tb-tip-align-right:focus-visible::after { transform: translateX(0) translateY(0); }
+.tb-th-tip.tb-tip-align-right::after { left: auto; right: 0; transform: translateX(0); }
 
 /* ---------- Страница «История изменений» ---------- */
 
