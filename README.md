@@ -140,9 +140,22 @@ docker compose up -d --build
 #              "cap123": 6.6, "vkl_fiz": 28.3, "sred_org": 23.1,
 #              "grp": "top"|"extra", "place": 13}, ...]}
 # rank проставляется сам по порядку внутри группы; grp по умолчанию 'top';
-# cap123/vkl_fiz/sred_org — трлн ₽, необязательные (нет значения — прочерк).
+# cap123/vkl_fiz/sred_org — трлн ₽, assets/profit — тоже необязательные
+# (ПСБ не публикует форму 0409101 → прочерк).
 TOP_BANKS_SECRET=<секрет> TOP_BANKS_URL=http://<IP>:8080 \
     python3 backend/update_top_banks.py banks.json
+```
+
+Если обновить срез нужно сразу после апгрейда схемы (старая таблица не
+умеет NULL в assets/profit, а семя app.py перезаписывает таблицу только
+когда она пуста) — пересоздать её и заправить семя можно вот так:
+
+```bash
+docker stop moex-rates-backend-1
+docker cp moex-rates-backend-1:/data/rates.db /tmp/rates.db
+python3 backend/reseed_top_banks.py /tmp/rates.db backend/app.py
+docker cp /tmp/rates.db moex-rates-backend-1:/data/rates.db
+docker start moex-rates-backend-1
 ```
 
 Без заданного `TOP_BANKS_SECRET` эндпоинт отвечает 503 — на проде секрет
