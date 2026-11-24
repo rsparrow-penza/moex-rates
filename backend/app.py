@@ -99,7 +99,7 @@ SOURCES = {
     # В таблице дневных ₽ их нет (источник не MOEX/CBR), только линии.
     "BTC": {
         "provider": "coingecko",
-        "title": "Bitcoin (CoinGecko, ₽)",
+        "title": "Bitcoin (CoinGecko, $)",
         "live": "https://api.coingecko.com/api/v3/simple/price",
         "history": "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
     },
@@ -423,20 +423,20 @@ def fetch_live_yahoo(currency: str) -> bool:
 
 def fetch_live_coingecko(currency: str) -> bool:
     """
-    Bitcoin: CoinGecko simple/price — текущая цена в рублях. Крипторынок
-    работает 24/7, поэтому точку пишем со временем: на графике биткоин —
-    непрерывная «змея», как OTC-валюты.
+    Bitcoin: CoinGecko simple/price — текущая цена в долларах (мировая котировка,
+    рубли здесь только шумят). Крипторынок работает 24/7, поэтому точку пишем
+    со временем: на графике биткоин — непрерывная «змея», как OTC-валюты.
     """
     source = SOURCES[currency]
     try:
         payload = http_get_json(source["live"],
-                                params={"ids": "bitcoin", "vs_currencies": "rub"})
-        price = payload["bitcoin"]["rub"]
+                                params={"ids": "bitcoin", "vs_currencies": "usd"})
+        price = payload["bitcoin"]["usd"]
         now = datetime.now(MSK)
         with get_db() as db:
             ok = upsert_rate(db, currency, "COINGECKO",
                              now.date().isoformat(), now.strftime("%H:%M"), price)
-        print(f"[{currency}] coingecko: {price} ₽")
+        print(f"[{currency}] coingecko: {price} $")
         return ok
     except Exception as e:
         print(f"[{currency}] ошибка coingecko-опроса: {e}")
@@ -561,11 +561,11 @@ def backfill_yahoo_daily(currency: str, days: int) -> int:
 def backfill_coingecko(currency: str, days: int) -> int:
     """
     Дневная история биткоина: market_chart отдаёт prices = [[ms, цена], ...]
-    одним ответом на любой запрос — идеальная пакетная история.
+    одним ответом на любой запрос — идеальная пакетная история. Валюта — доллар.
     """
     try:
         payload = http_get_json(SOURCES[currency]["history"],
-                                params={"vs_currency": "rub", "days": days,
+                                params={"vs_currency": "usd", "days": days,
                                         "interval": "daily"})
         saved = 0
         with get_db() as db:

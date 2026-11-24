@@ -36,7 +36,7 @@ const COLORS = {
 const PALETTE = ['#4c6ef5', '#e8590c', '#20c997', '#845ef7', '#f06595']
 
 // Единицы отображения: всё в рублях, кроме нефти и золота (торгуются в $)
-const UNITS = { BRENT: '$', GOLD: '$' }
+const UNITS = { BTC: '$', BRENT: '$', GOLD: '$' }
 const unitFor = (code) => UNITS[code] ?? '₽'
 
 // Числа вида 5 500 000 ₽ длинны и людям не нужны — крупное округляем
