@@ -280,14 +280,14 @@ class TestTopBanks(unittest.TestCase):
         # алфавиту, и test_post_* иначе «съедает» рейтинг у test_seeded_*
         with rates.get_db() as db:
             db.execute("DELETE FROM top_banks")
-            for i, (name, assets, n1, profit, siber) in enumerate(rates.TOP_BANKS_SEED, 1):
-                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp)"
-                           " VALUES (?, ?, ?, ?, ?, ?, 'top')",
-                           (name, assets, n1, profit, siber, i))
-            for i, (name, assets, n1, profit, siber, place) in enumerate(rates.TOP_BANKS_EXTRA, 1):
-                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
-                           " VALUES (?, ?, ?, ?, ?, ?, 'extra', ?)",
-                           (name, assets, n1, profit, siber, i, place))
+            for i, (name, assets, n1, profit, siber, cap123, vkl_fiz, sred_org) in enumerate(rates.TOP_BANKS_SEED, 1):
+                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp,"
+                           " cap123, vkl_fiz, sred_org) VALUES (?, ?, ?, ?, ?, ?, 'top', ?, ?, ?)",
+                           (name, assets, n1, profit, siber, i, cap123, vkl_fiz, sred_org))
+            for i, (name, assets, n1, profit, siber, place, cap123, vkl_fiz, sred_org) in enumerate(rates.TOP_BANKS_EXTRA, 1):
+                db.execute("INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place,"
+                           " cap123, vkl_fiz, sred_org) VALUES (?, ?, ?, ?, ?, ?, 'extra', ?, ?, ?, ?)",
+                           (name, assets, n1, profit, siber, i, place, cap123, vkl_fiz, sred_org))
             db.execute("INSERT OR REPLACE INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, 'x')",
                        (rates.TOP_BANKS_AS_OF,))
         self.client = rates.app.test_client()
@@ -303,14 +303,48 @@ class TestTopBanks(unittest.TestCase):
         self.assertEqual([b["rank"] for b in top], list(range(1, 11)))
         self.assertTrue(body["as_of"])
 
+    def test_new_metrics_seeded(self):
+        # капитал по ф.123, вклады физлиц и средства организаций — в трлн ₽
+        top = self.client.get("/api/top-banks").json["banks"]
+        sber = next(b for b in top if b["name"] == "Сбербанк")
+        self.assertEqual((sber["cap123"], sber["vkl_fiz"], sber["sred_org"]), (8.1, 19.8, 15.7))
+        novik = next(b for b in top if b["name"] == "Новикомбанк")
+        self.assertEqual((novik["cap123"], novik["sred_org"]), (0.13, 1.16))
+        psb = next(b for b in top if b["name"] == "Промсвязьбанк")
+        self.assertIsNone(psb["vkl_fiz"])                # ф.101 не публикуется
+
+    def test_post_accepts_optional_metrics(self):
+        new = {"as_of": "01.03.2027", "banks": [
+            {"name": "Банк А", "assets": 10.5, "n1": 12.0, "profit": 100,
+             "cap123": 1.5, "vkl_fiz": 4.2, "sred_org": 3.3},
+            {"name": "Банк Б", "assets": 9.0, "n1": 11.0, "profit": 90},
+            {"name": "Банк В", "assets": 8.0, "n1": 10.0, "profit": 80, "cap123": None},
+        ]}
+        r = self.client.post("/api/top-banks", json=new, headers={"X-Admin-Token": "test-secret"})
+        self.assertTrue(r.json["ok"])
+        body = self.client.get("/api/top-banks").json
+        self.assertEqual(body["banks"][0]["vkl_fiz"], 4.2)
+        self.assertIsNone(body["banks"][1]["cap123"])   # не задано -> прочерк
+        self.assertIsNone(body["banks"][2]["cap123"])   # явно null -> прочерк
+
     def test_extra_seeded(self):
         body = self.client.get("/api/top-banks").json
         extra = [b for b in body["banks"] if b["grp"] == "extra"]
         self.assertEqual([b["name"] for b in extra],
                          ["Новикомбанк", "ББР", "Хлынов", "Кузнецкий"])
         self.assertEqual(extra[0]["place"], 13)          # место по активам в РФ
-        self.assertEqual(extra[3]["place"], 169)
+        self.assertEqual(extra[3]["place"], 173)
         self.assertLess(extra[3]["profit"], 0)           # Кузнецкий — убыток
+
+    def test_seed_is_rsbu_with_gaps(self):
+        # семя — отчётность ЦБ по РСБУ; ПСБ форму 0409101 не публикует
+        top = self.client.get("/api/top-banks").json["banks"]
+        psb = next(b for b in top if b["name"] == "Промсвязьбанк")
+        self.assertIsNone(psb["assets"])
+        self.assertIsNone(psb["profit"])
+        self.assertEqual(psb["cap123"], 1.0)
+        sber = next(b for b in top if b["name"] == "Сбербанк")
+        self.assertGreater(sber["assets"], 60)           # 68,8 трлн по ф.101
 
     def test_post_requires_secret_and_token(self):
         r = self.client.post("/api/top-banks", json={"as_of": "x", "banks": []})

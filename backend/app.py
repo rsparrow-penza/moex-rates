@@ -141,31 +141,42 @@ RUONIA_URL = "https://www.cbr.ru/hd_base/ruonia/"
 # Топ-10 банков: живого открытого источника (указатель/реестр ЦБ) в сети
 # нет — рейтинг хранится в таблице top_banks и обновляется POST-ом с
 # секретом из TOP_BANKS_SECRET. Семя — актуальный срез на дату AS_OF.
+#
+# Все цифры — отчётность одного банка по РСБУ, которую ЦБ выкладывает в
+# разделе «Информация по кредитным организациям → Формы отчётности»
+# (зеркало pervyschet.ru, сверено с рейтингом Банки.ру):
+#   assets   — активы нетто, форма 0409101
+#   cap123   — собственные средства (капитал), строка 000 формы 0409123
+#   n1       — норматив Н1.0, форма 0409135 (0 = нет данных)
+#   profit   — чистая прибыль с начала года (счёт 706 формы 0409101)
+#   vkl_fiz  — вклады физлиц: сумма 42.2 (счета 423/426) + 522
+#   sred_org — средства юрлиц: 401–407 + 410–422/42.1/427–439/43.1 + 521
+# None = банк форму не публикует (у ПСБ нет 0409101, поэтому нет активов,
+# прибыли и клиентских денег) — на фронте прочерк.
 TOP_BANKS_AS_OF = "01.09.2026"
 TOP_BANKS_SEED = [
-    # name, assets(трлн ₽), n1.0(%), profit(млрд ₽), siber
-    ("Сбербанк",          63.9, 13.5, 1730, 1),
-    ("ВТБ",               33.4, 10.9,  540, 1),
-    ("Газпромбанк",       18.6, 12.4,  380, 1),
-    ("Россельхозбанк",     8.9, 14.2,   46, 1),
-    ("Альфа-Банк",         8.3, 11.8,  470, 1),
-    ("Промсвязьбанк",      8.0, 11.9,   62, 1),
-    ("Совкомбанк",         6.8, 14.0,   40, 1),
-    ("Т-Банк",             5.9, 16.4,  122, 0),
-    ("Московский кредитный банк", 5.1, 13.6, 34, 0),
-    ("Озон Банк",          3.0, 18.1,   25, 0),
+    # name, assets, n1.0, profit (млрд ₽), siber, cap123, vkl_fiz, sred_org — всё в трлн ₽
+    ("Сбербанк",          68.8, 13.1, 1332.7, 1, 8.1, 19.8, 15.7),
+    ("ВТБ",               36.8,  9.7,  378.2, 1, 2.4,  8.6, 13.4),
+    ("Газпромбанк",       18.0, 11.5,  124.7, 1, 1.7,  2.5,  8.1),
+    ("Альфа-Банк",        13.7, 11.5,  226.3, 1, 1.3,  3.0,  4.4),
+    ("Промсвязьбанк",     None, 11.6,   None, 1, 1.0, None, None),  # ф.101 не публикует
+    ("Россельхозбанк",     5.4, 13.1,   72.5, 1, 0.6,  1.5,  2.1),
+    ("Т-Банк",             5.5, 13.0,  131.8, 0, 0.7,  2.8,  0.7),
+    ("Московский кредитный банк", 4.8, 11.4, 17.9, 1, 0.4, 0.7, 1.9),
+    ("Совкомбанк",         4.2, 11.4,   86.1, 1, 0.5,  0.9,  1.9),
+    ("Озон Банк",          1.0, 21.7,    27.5, 0, 0.1,  0.1,  0.1),
 ]
 
 # Вторая группа «избранные банки» — не рейтинг, а срез, который смотрим
-# сами: Новиком, ББР, Хлынов, Кузнецкий. Цифры с карточек banki.ru
-# (отчётность на 01.09.2026), место — по активам в РФ. n1 = 0 означает
-# «нет данных» — фронт показывает прочерк.
+# сами: Новиком, ББР, Хлынов, Кузнецкий. Место (place) — по активам нетто
+# в РФ на 01.09.2026 (указатель ЦБ в терминах отчётности ЦБ).
 TOP_BANKS_EXTRA = [
-    # name, assets(трлн ₽), n1.0(%), profit(млрд ₽), siber, place
-    ("Новикомбанк",    1.6,   0, 18.0,  0, 13),
-    ("ББР",            0.207, 0,  1.2,  0, 43),
-    ("Хлынов",         0.052, 0,  0.766, 0, 95),
-    ("Кузнецкий",      0.011, 0, -0.044, 0, 169),
+    # name, assets, n1.0, profit (млрд ₽), siber, place, cap123, vkl_fiz, sred_org
+    ("Новикомбанк",    1.6, 13.0,   18.1, 0, 13, 0.13, 0.11, 1.16),
+    ("ББР",            0.21, 18.2,    1.2, 0, 43, 0.03, 0.04, 0.07),
+    ("Хлынов",         0.05, 14.0,    0.8, 0, 94, 0.007, 0.025, 0.010),
+    ("Кузнецкий",      0.011, 11.8,  -0.04, 0, 173, 0.0014, 0.002, 0.0),
 ]
 
 # Официальная годовая инфляция (ИПЦ, % к предыдущему году) по России —
@@ -302,23 +313,30 @@ def init_db():
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS top_banks (
-                name    TEXT PRIMARY KEY,
-                assets  REAL NOT NULL,   -- трлн ₽
-                n1      REAL NOT NULL,   -- норматив достаточности капитала, % (0 = нет данных)
-                profit  REAL NOT NULL,   -- чистая прибыль за год, млрд ₽
-                siber   INTEGER NOT NULL,-- 1 — системно значимый
-                rank    INTEGER NOT NULL,
-                grp     TEXT NOT NULL DEFAULT 'top',
-                place   INTEGER          -- место по активам в РФ (для extras)
+                name      TEXT PRIMARY KEY,
+                assets    REAL,               -- трлн ₽ (NULL = банк не публикует форму 0409101)
+                n1        REAL NOT NULL,      -- норматив достаточности капитала, % (0 = нет данных)
+                profit    REAL,               -- чистая прибыль с начала года, млрд ₽ (NULL = нет данных)
+                siber     INTEGER NOT NULL,   -- 1 — системно значимый
+                rank      INTEGER NOT NULL,
+                grp       TEXT NOT NULL DEFAULT 'top',
+                place     INTEGER,            -- место по активам в РФ (для extras)
+                cap123    REAL,               -- капитал по форме № 123, трлн ₽ (NULL = нет данных)
+                vkl_fiz   REAL,               -- вклады физлиц, трлн ₽
+                sred_org  REAL                -- средства предприятий и организаций, трлн ₽
             )
             """
         )
-        # Миграция старой схемы (без grp/place): SQLite добавит колонки с значениями по умолчанию.
+        # Миграция старой схемы (без grp/place, потом без новых показателей):
+        # SQLite добавит колонки с значениями по умолчанию.
         cols = [r["name"] for r in db.execute("PRAGMA table_info(top_banks)")]
         if "grp" not in cols:
             db.execute("ALTER TABLE top_banks ADD COLUMN grp TEXT NOT NULL DEFAULT 'top'")
         if "place" not in cols:
             db.execute("ALTER TABLE top_banks ADD COLUMN place INTEGER")
+        for col in ("cap123", "vkl_fiz", "sred_org"):
+            if col not in cols:
+                db.execute(f"ALTER TABLE top_banks ADD COLUMN {col} REAL")
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS top_banks_meta (
@@ -329,20 +347,20 @@ def init_db():
             """
         )
         if not db.execute("SELECT 1 FROM top_banks WHERE grp = 'top' LIMIT 1").fetchone():
-            for i, (name, assets, n1, profit, siber) in enumerate(TOP_BANKS_SEED, 1):
+            for i, (name, assets, n1, profit, siber, cap123, vkl_fiz, sred_org) in enumerate(TOP_BANKS_SEED, 1):
                 db.execute(
-                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp)"
-                    " VALUES (?, ?, ?, ?, ?, ?, 'top')",
-                    (name, assets, n1, profit, siber, i))
+                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp,"
+                    " cap123, vkl_fiz, sred_org) VALUES (?, ?, ?, ?, ?, ?, 'top', ?, ?, ?)",
+                    (name, assets, n1, profit, siber, i, cap123, vkl_fiz, sred_org))
             db.execute(
                 "INSERT INTO top_banks_meta (id, as_of, updated_at) VALUES (1, ?, ?)",
                 (TOP_BANKS_AS_OF, datetime.now().isoformat(timespec="seconds")))
         if not db.execute("SELECT 1 FROM top_banks WHERE grp = 'extra' LIMIT 1").fetchone():
-            for i, (name, assets, n1, profit, siber, place) in enumerate(TOP_BANKS_EXTRA, 1):
+            for i, (name, assets, n1, profit, siber, place, cap123, vkl_fiz, sred_org) in enumerate(TOP_BANKS_EXTRA, 1):
                 db.execute(
-                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
-                    " VALUES (?, ?, ?, ?, ?, ?, 'extra', ?)",
-                    (name, assets, n1, profit, siber, i, place))
+                    "INSERT OR REPLACE INTO top_banks (name, assets, n1, profit, siber, rank, grp, place,"
+                    " cap123, vkl_fiz, sred_org) VALUES (?, ?, ?, ?, ?, ?, 'extra', ?, ?, ?, ?)",
+                    (name, assets, n1, profit, siber, i, place, cap123, vkl_fiz, sred_org))
 
 
 init_db()
@@ -920,8 +938,8 @@ def top_banks():
     """
     with get_db() as db:
         rows = db.execute(
-            "SELECT rank, name, assets, n1, profit, siber, grp, place"
-            " FROM top_banks ORDER BY grp DESC, rank").fetchall()
+            "SELECT rank, name, assets, n1, profit, siber, grp, place,"
+            " cap123, vkl_fiz, sred_org FROM top_banks ORDER BY grp DESC, rank").fetchall()
         meta = db.execute("SELECT as_of, updated_at FROM top_banks_meta WHERE id = 1").fetchone()
     return jsonify({"as_of": meta["as_of"] if meta else "",
                     "updated_at": meta["updated_at"] if meta else "",
@@ -933,9 +951,15 @@ def top_banks_update():
     """
     POST /api/top-banks — обновить срез: {"as_of": "01.12.2026",
     "banks": [{"name": ..., "assets": ..., "n1": ..., "profit": ...,
-               "siber": true, "grp": "top"|"extra", "place": 13}, ...]}
+               "siber": true, "grp": "top"|"extra", "place": 13,
+               "cap123": 8.1, "vkl_fiz": 19.8, "sred_org": 15.7}, ...]}
     в порядке убывания активов; grp и place необязательные (по умолчанию
-    'top' и null). rank проставляется сам — порядком внутри группы.
+    'top' и null). Все деньги — отчётность одного банка по РСБУ (формы
+    0409101/0409123/0409135): assets/cap123/vkl_fiz/sred_org — трлн ₽,
+    profit — чистая прибыль с начала года, млрд ₽. Любое из денежных
+    полей может отсутствовать или быть null (банк не публикует форму) —
+    на фронте это прочерк. rank проставляется сам — порядком внутри
+    группы.
 
     Доступ по заголовку X-Admin-Token (секрет в переменной окружения
     TOP_BANKS_SECRET): без секретного слова — 503, с неверным — 401.
@@ -954,6 +978,11 @@ def top_banks_update():
     if not as_of or not isinstance(banks, list) or not (3 <= len(banks) <= 25):
         return jsonify({"ok": False, "error": "нужны as_of и список banks из 3..25 элементов"}), 400
 
+    def num_opt(b, key):
+        """Необязательное числовое поле: отсутствует или null -> None."""
+        v = b.get(key)
+        return None if v is None else float(v)
+
     rows = []
     seen = {"top": 0, "extra": 0}
     for i, b in enumerate(banks, 1):
@@ -962,18 +991,19 @@ def top_banks_update():
             return jsonify({"ok": False, "error": f"строка {i}: grp должен быть top или extra"}), 400
         try:
             seen[grp] += 1
-            rows.append((b["name"], float(b["assets"]), float(b["n1"]),
-                         float(b["profit"]), 1 if b.get("siber") else 0,
-                         seen[grp], grp, b.get("place")))
+            rows.append((b["name"], num_opt(b, "assets"), float(b["n1"]),
+                         num_opt(b, "profit"), 1 if b.get("siber") else 0,
+                         seen[grp], grp, b.get("place"),
+                         num_opt(b, "cap123"), num_opt(b, "vkl_fiz"), num_opt(b, "sred_org")))
         except (KeyError, TypeError, ValueError):
             return jsonify({"ok": False,
-                            "error": f"строка {i}: нужны name, assets, n1, profit (числа)"}), 400
+                            "error": f"строка {i}: нужны name, n1 (число), assets/profit — числа или null"}), 400
 
     with get_db() as db:
         db.execute("DELETE FROM top_banks")
         db.executemany(
-            "INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO top_banks (name, assets, n1, profit, siber, rank, grp, place,"
+            " cap123, vkl_fiz, sred_org) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows)
         db.execute(
             """
