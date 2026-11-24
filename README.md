@@ -102,6 +102,7 @@ docker compose up -d --build
 | Переменная | Что делает |
 |---|---|
 | `DATABASE_FILE` | путь к SQLite (в compose — том `/data/rates.db`) |
+| `MOEX_FORCE_HTTP` | `1` — ходить в ISS по http вместо https (на VPS MOEX отдаёт цепочку с «Russian Trusted Sub CA», которой нет в стандартном доверилище, и TLS-рукопожатие падает; локально флаг не нужен) |
 | `TOP_BANKS_SECRET` | включает POST /api/top-banks (обновление рейтинга банков); без неё — 503 |
 | `SKIP_SCHEDULER` / `SKIP_SEED` | не поднимать планировщик / не лезть в сеть при старте (тесты) |
 

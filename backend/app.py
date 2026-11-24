@@ -163,6 +163,21 @@ INFLATION_URL = "https://api.worldbank.org/v2/country/RUS/indicator/FP.CPI.TOTL.
 
 HTTP_TIMEOUT = 20  # секунд: биржа иногда думает долго, вечно ждать нельзя
 
+# ММВБ на некоторых хостах (VPS в том числе) отдаёт кривую цепочку TLS —
+# сертификат выписан «Russian Trusted Sub CA», которого нет в стандартной
+# корневой хранилище, и handshake падает. Для iss.moex.com в этом случае
+# идём по http: это тот же публичный read-only ISS, без учётных данных.
+MOEX_HTTP_HOSTS = ("iss.moex.com",)
+
+
+def moex_url(url: str) -> str:
+    """HTTPS-адрес ММВБ → HTTP, если за этим хостом TLS не проходит."""
+    if os.environ.get("MOEX_FORCE_HTTP") == "1":
+        for host in MOEX_HTTP_HOSTS:
+            if host in url:
+                return url.replace("https://", "http://", 1)
+    return url
+
 
 # ---------------------------------------------------------------------------
 # База данных
@@ -350,7 +365,7 @@ def fetch_live_moex(currency: str) -> bool:
     """
     source = SOURCES[currency]
     try:
-        payload = http_get_json(source["live"])
+        payload = http_get_json(moex_url(source["live"]))
         rows = payload["marketdata"]["data"]
         cols = payload["marketdata"]["columns"]
         if not rows:
@@ -603,7 +618,7 @@ def backfill(currency: str, days: int = 90) -> int:
     try:
         while start <= date.today():
             stop = min(start + timedelta(days=13), date.today())
-            payload = http_get_json(source["history"], params={
+            payload = http_get_json(moex_url(source["history"]), params={
                 "from": start.isoformat(),
                 "to": stop.isoformat(),
             })

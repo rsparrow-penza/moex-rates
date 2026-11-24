@@ -118,6 +118,20 @@ class TestUpsert(unittest.TestCase):
             self.assertFalse(rates.upsert_rate(db, "USD", "MOEX", "2026-11-02", "", None))
 
 
+class TestMoexFetchHttpFallback(unittest.TestCase):
+    """MOEX_FORCE_HTTP=1 переводит только iss.moex.com на http — и ничего больше."""
+
+    def test_toggle(self):
+        https = "https://iss.moex.com/iss/engines/currency/markets/selt/securities/CNYRUB_TOM.json"
+        yahoo = "https://query1.finance.yahoo.com/v8/finance/chart/BZ=F"
+        os.environ.pop("MOEX_FORCE_HTTP", None)
+        self.assertEqual(rates.moex_url(https), https)
+        os.environ["MOEX_FORCE_HTTP"] = "1"
+        self.addCleanup(os.environ.pop, "MOEX_FORCE_HTTP", None)
+        self.assertEqual(rates.moex_url(https), https.replace("https://", "http://", 1))
+        self.assertEqual(rates.moex_url(yahoo), yahoo)   # yahoo не трогаем
+
+
 class TestMoexFetch(unittest.TestCase):
 
     def setUp(self):
