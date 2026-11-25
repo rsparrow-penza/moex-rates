@@ -48,6 +48,18 @@ const LABELS = {
   BTC: 'Bitcoin $', BRENT: 'Brent $', GOLD: 'Gold $',
 }
 
+// Brent и Gold — в таблицу дневными закрытиями Yahoo (rate_time = ''):
+// это не «курс», а цена актива в $, но сравнивать их по дням полезно.
+// Bitcoin в таблице не нужен: у него часовые точки 24/7, дневной строки нет.
+const ASSET_CODES = ['BRENT', 'GOLD']
+const assetFmt = (v) => v >= 1000
+  ? Math.round(v).toLocaleString('ru-RU')      // золото: 3 522 — без копеек
+  : v.toFixed(2)                               // нефть: 88,29
+const thLabel = (c) => (ASSET_CODES.includes(c)
+  ? (LABELS[c] ?? c).replace(/\s*\$\s*/, '')   // «Brent $» → «Brent» (юнит в заголовке)
+  : LABELS[c] ?? c)
+const thUnit = (c) => (ASSET_CODES.includes(c) ? '$' : '₽')
+
 // Биржевые серии ММВБ (фиксинги USD/EUR и спот CNY) из интерфейса убраны
 // полностью: нет чипов в фильтрах, линий на графике и колонок в таблице.
 // Бэкенд их продолжает собирать — история лежит в базе, вернуть отображение
@@ -138,16 +150,22 @@ function RatesApp() {
     return out
   }, [series])
 
-  // --- Таблица: дневные ряды провайдеров moex/cbr. Внутридневные OTC-строки, ---
-  // биткоин и нефть (у них своя природа и своя валюта) в неё не попадают
+  // --- Таблица: дневные ряды moex/cbr плюс дневные закрытия Brent/Gold ($).
+  // Внутридневные OTC-строки и биткоин (часовые тики 24/7) в неё не попадают
   const tableCodes = useMemo(
-    () => meta.filter((m) => ['moex', 'cbr'].includes(m.provider) && picked?.includes(m.code)).map((m) => m.code),
+    () => meta
+      .filter((m) => (['moex', 'cbr'].includes(m.provider) || ASSET_CODES.includes(m.code))
+        && picked?.includes(m.code))
+      .map((m) => m.code),
     [meta, picked],
   )
   const byDate = useMemo(() => {
     const map = new Map()
     for (const r of rates) {
-      if (!['MOEX', 'CBR'].includes(r.source) || !tableCodes.includes(r.currency)) continue
+      if (!tableCodes.includes(r.currency)) continue
+      const dailyFx = ['MOEX', 'CBR'].includes(r.source)
+      const dailyAsset = ASSET_CODES.includes(r.currency) && r.source === 'YAHOO' && !r.rate_time
+      if (!dailyFx && !dailyAsset) continue
       if (!map.has(r.rate_date)) map.set(r.rate_date, {})
       map.get(r.rate_date)[r.currency] = r.rate
     }
@@ -179,7 +197,7 @@ function RatesApp() {
         <a className="nav-link" href="#/changelog">История изменений →</a>
       </div>
       <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
-        Bitcoin, Brent и Gold — активы, только график</p>
+        Brent и Gold — в таблице дневными закрытиями в $; Bitcoin — только график</p>
 
       {error && <div className="error">{error}</div>}
 
@@ -251,7 +269,7 @@ function RatesApp() {
         <thead>
           <tr>
             <th>Дата</th>
-            {tableCodes.map((c) => <th key={c}>{LABELS[c] ?? c}, ₽</th>)}
+            {tableCodes.map((c) => <th key={c}>{thLabel(c)}, {thUnit(c)}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -264,7 +282,9 @@ function RatesApp() {
                 return (
                   <td key={c} className={ex === 'max' ? 'cell-max' : ex === 'min' ? 'cell-min' : undefined}
                       title={ex ? `локальный ${ex === 'max' ? 'максимум' : 'минимум'}` : undefined}>
-                    {v != null ? `${ex === 'max' ? '▲ ' : ex === 'min' ? '▼ ' : ''}${v.toFixed(2)}` : '—'}
+                    {v != null
+                      ? `${ex === 'max' ? '▲ ' : ex === 'min' ? '▼ ' : ''}${ASSET_CODES.includes(c) ? assetFmt(v) : v.toFixed(2)}`
+                      : '—'}
                   </td>
                 )
               })}
