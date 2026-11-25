@@ -21,6 +21,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+# курсовая история живёт отдельно — econ.py подключается после init_db(),
+# ему нужен рабочий get_db
+import econ
+
 app = Flask(__name__)
 CORS(app)
 
@@ -376,6 +380,16 @@ def http_get_json(url, params=None):
                         headers={"User-Agent": "moex-rates/1.0 (educational project)"})
     resp.raise_for_status()
     return resp.json()
+
+
+# «Экономика» (econ.py) пользуется нашими же get_db/http_get_json/moex_url —
+# связываем сразу после определения фетчера
+# обёртки, а не сами функции: тесты подменяют http_get_json в модуле,
+# и econ.py должен видеть подмену
+econ.configure(lambda: get_db(),
+               lambda url, params=None: http_get_json(url, params),
+               lambda url: moex_url(url))
+econ.init_econ_db()
 
 
 def http_get_xml_text(url, params=None, encoding="windows-1251"):
@@ -792,6 +806,7 @@ _is_main_process = (
 if _is_main_process and not os.environ.get("SKIP_SCHEDULER"):
     scheduler = BackgroundScheduler()
     scheduler.add_job(hourly_job, "interval", hours=1, id="fetch_moex")
+    econ.register_jobs(scheduler)
     scheduler.start()
 
 if _is_main_process and not os.environ.get("SKIP_SEED"):
@@ -817,6 +832,11 @@ if _is_main_process and not os.environ.get("SKIP_SEED"):
             for currency in empty:
                 backfill(currency)
         hourly_job()     # он же подтянет и ключевую ставку
+        # макроряды «Экономики»: разово, если база рядов пуста
+        with get_db() as db:
+            has_econ = db.execute("SELECT 1 FROM econ_series LIMIT 1").fetchone()
+        if not has_econ:
+            econ.econ_seed()
     seed_on_startup()
 
 
@@ -1012,6 +1032,161 @@ def top_banks_update():
             """,
             (as_of, datetime.now().isoformat(timespec="seconds")))
     return jsonify({"ok": True, "count": len(rows), "as_of": as_of})
+
+
+# ---------------------------------------------------------------------------
+# «Экономика»: ставки ЦБ, вклады топ-10, ОФЗ, реальный сектор, бюджет
+# ---------------------------------------------------------------------------
+
+@app.route("/api/econ/meta", methods=["GET"])
+def econ_meta():
+    """Справочник рядов для фронта: ключ, подпись, единицы, группа, источник."""
+    out = [{"key": k, **{f: v[f] for f in ("label", "unit", "group", "source", "explain")}}
+           for k, v in econ.ECON_SERIES.items()]
+    for secid, shortname, matdate in econ.OFZ_UNIVERSE:
+        out.append({"key": f"bond_yld_{secid}", "label": shortname, "unit": "%",
+                    "group": "bonds", "source": "MOEX",
+                    "explain": f"доходность к погашению ОФЗ с датой погашения {matdate}"})
+    return jsonify(out)
+
+
+@app.route("/api/econ/series", methods=["GET"])
+def econ_series():
+    """
+    GET /api/econ/series?key=rate_corp_long&from=2024-01&to=2026-11
+    Один ряд из econ_series (месячные/квартальные/дневные — как лежит).
+    """
+    key = request.args.get("key", "")
+    if key not in econ.ECON_SERIES and not key.startswith("bond_yld_"):
+        return jsonify({"error": f"неизвестный ряд {key}"}), 404
+    sql = "SELECT period, value FROM econ_series WHERE key = ?"
+    params = [key]
+    if request.args.get("from"):
+        sql += " AND period >= ?"; params.append(request.args["from"])
+    if request.args.get("to"):
+        sql += " AND period <= ?"; params.append(request.args["to"])
+    with get_db() as db:
+        rows = db.execute(sql + " ORDER BY period", params).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/econ/bonds", methods=["GET"])
+def econ_bonds():
+    """
+    Кривая ОФЗ: последний дневной снимок + история доходностей за окно
+    (from/to — YYYY-MM-DD, по умолчанию последний год). Фронту хватает
+    одного ответа и на «снимок кривой», и на «линии по месяцам».
+    """
+    till = request.args.get("to") or datetime.now(MSK).date().isoformat()
+    since = request.args.get("from") or (
+        datetime.now(MSK).date() - timedelta(days=365)).isoformat()
+    with get_db() as db:
+        snap_date = db.execute(
+            "SELECT MAX(snap_date) AS d FROM ofz_snapshot").fetchone()["d"]
+        curve = db.execute(
+            "SELECT secid, shortname, matdate, yield_prc FROM ofz_snapshot"
+            " WHERE snap_date = ? ORDER BY matdate", (snap_date,)).fetchall() if snap_date else []
+        series = {}
+        for secid, _sn, _md in econ.OFZ_UNIVERSE:
+            rows = db.execute(
+                "SELECT period, value FROM econ_series WHERE key = ?"
+                " AND period >= ? AND period <= ? ORDER BY period",
+                (f"bond_yld_{secid}", since, till)).fetchall()
+            if rows:
+                series[secid] = [{"date": r["period"], "yield": r["value"]} for r in rows]
+    return jsonify({"snap_date": snap_date, "curve": [dict(c) for c in curve],
+                    "series": series})
+
+
+@app.route("/api/budget", methods=["GET"])
+def budget_get():
+    """
+    GET /api/budget — федеральный бюджетный срез: строки по месяцам (накоплено
+    с начала года) + as_of. Обновляется вручную (минфин режет ботов).
+    """
+    with get_db() as db:
+        rows = db.execute("SELECT period, field, value FROM budget_rows"
+                          " ORDER BY period, field").fetchall()
+        meta = db.execute("SELECT as_of, updated_at FROM budget_meta WHERE id = 1").fetchone()
+    out = {}
+    for r in rows:
+        out.setdefault(r["period"], {})[r["field"]] = r["value"]
+    return jsonify({"as_of": meta["as_of"] if meta else "",
+                    "updated_at": meta["updated_at"] if meta else "",
+                    "rows": [{"period": p, **v} for p, v in sorted(out.items())]})
+
+
+@app.route("/api/budget", methods=["POST"])
+def budget_update():
+    """
+    POST /api/budget — заменить срез: {"as_of": "01.11.2026",
+    "rows": [{"period": "2026-09", "revenue": 32100, "oil_gas": 7900,
+              "non_oil": 24200, "expenditure": 34800, "deficit": -2700,
+              "nd_deficit": -9800}, ...]} (млрд ₽, накоплено с начала года;
+    deficit — со знаком: минус = дефицит). Требует X-Admin-Token.
+    """
+    secret = os.environ.get("TOP_BANKS_SECRET")
+    if not secret:
+        return jsonify({"ok": False, "error": "обновление отключено: задайте TOP_BANKS_SECRET"}), 503
+    if request.headers.get("X-Admin-Token") != secret:
+        return jsonify({"ok": False, "error": "неверный токен"}), 401
+    data = request.get_json(silent=True) or {}
+    as_of = str(data.get("as_of", "")).strip()
+    rows = data.get("rows")
+    if not as_of or not isinstance(rows, list) or not rows:
+        return jsonify({"ok": False, "error": "нужны as_of и непустой список rows"}), 400
+    clean = []
+    for i, r in enumerate(rows, 1):
+        try:
+            period = str(r["period"])
+            rec = {"period": period}
+            for f in econ.BUDGET_FIELDS:
+                if r.get(f) is not None:
+                    rec[f] = float(r[f])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"ok": False, "error": f"строка {i}: нужны period и поля числами"}), 400
+        clean.append(rec)
+    with get_db() as db:
+        db.execute("DELETE FROM budget_rows")
+        for rec in clean:
+            period = rec.pop("period")
+            for f, v in rec.items():
+                db.execute("INSERT OR REPLACE INTO budget_rows (period, field, value) VALUES (?,?,?)",
+                           (period, f, v))
+        db.execute(
+            """
+            INSERT INTO budget_meta (id, as_of, updated_at) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET as_of = excluded.as_of, updated_at = excluded.updated_at
+            """, (as_of, datetime.now().isoformat(timespec="seconds")))
+    return jsonify({"ok": True, "count": len(clean), "as_of": as_of})
+
+
+@app.route("/api/econ/real", methods=["POST"])
+def econ_real_update():
+    """
+    POST /api/econ/real — ручное пополнение рядов, которые Росстат отдаёт
+    только в переименованных файлах: {"series": {"retail_turnover":
+    {"2026-09": 3120.4}, "retail_yoy": {"2026-09": 4.1}}}. Тот же токен.
+    """
+    secret = os.environ.get("TOP_BANKS_SECRET")
+    if not secret:
+        return jsonify({"ok": False, "error": "обновление отключено: задайте TOP_BANKS_SECRET"}), 503
+    if request.headers.get("X-Admin-Token") != secret:
+        return jsonify({"ok": False, "error": "неверный токен"}), 401
+    data = request.get_json(silent=True) or {}
+    series = data.get("series") or {}
+    unknown = [k for k in series if k not in econ.ECON_SERIES]
+    if unknown:
+        return jsonify({"ok": False, "error": f"неизвестные ряды: {unknown}"}), 400
+    rows = []
+    for key, per in series.items():
+        for p, v in (per or {}).items():
+            try:
+                rows.append((key, str(p), float(v)))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": f"{key}: значения должны быть числами"}), 400
+    econ.upsert_series(rows)
+    return jsonify({"ok": True, "count": len(rows)})
 
 
 @app.route("/api/health", methods=["GET"])

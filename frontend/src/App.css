@@ -842,6 +842,125 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .tb-th-tip.tb-tip-align-right { text-align: right; }
 .tb-th-tip.tb-tip-align-right::after { left: auto; right: 0; transform: translateX(0); }
 
+
+/* ---------- Экономика (ставки · ОФЗ · реальный сектор · бюджет) ---------- */
+
+.econ {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.econ h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+
+.ec-title {
+  margin: 18px 0 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #c7c7d8;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ec-slope {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: #8fd3c7;
+  background: #23233197;
+  border: 1px solid #33334a;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+/* чипы-переключатели рядов ставок */
+.ec-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+
+.ec-chip {
+  cursor: pointer;
+  border: 1px solid #33334a;
+  border-radius: 999px;
+  background: transparent;
+  color: #77778b;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ec-chip::before {
+  content: "";
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--c, #4c6ef5);
+  opacity: 0.35;
+}
+.ec-chip.on { color: #f2f2f7; border-color: #4a4a66; }
+.ec-chip.on::before { opacity: 1; }
+
+.ec-chart { width: 100%; height: auto; }
+.ec-chart polyline { fill: none; stroke-width: 1.8; }
+.ec-guide { stroke: #2b2b3d; stroke-width: 1; }
+.ec-label { fill: #77778b; font-size: 10px; }
+
+.ec-mini-note { margin: 6px 0 0; font-size: 0.8rem; color: #9a9ab0; }
+.ec-mini-note b { color: #f2f2f7; font-weight: 600; }
+
+/* таблица ОФЗ / бюджета */
+.ec-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.ec-table th {
+  text-align: left;
+  color: #9a9ab0;
+  font-weight: 500;
+  font-size: 0.76rem;
+  padding: 4px 8px;
+  border-bottom: 1px solid #33334a;
+}
+.ec-table td {
+  color: #f2f2f7;
+  padding: 5px 8px;
+  border-bottom: 1px solid #26263a;
+  font-variant-numeric: tabular-nums;
+}
+.ec-table td.ec-mat { color: #77778b; }
+.ec-table td.ec-yld { text-align: right; font-weight: 600; }
+
+/* плитка реального сектора */
+.ec-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+.ec-tile {
+  border: 1px solid #2b2b3d;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #191924;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ec-tile-label { font-size: 0.76rem; color: #9a9ab0; }
+.ec-tile-value { font-size: 0.98rem; font-weight: 600; color: #f2f2f7; }
+.ec-tile-value i { font-style: normal; font-size: 0.72rem; color: #77778b; }
+.ec-tile-empty { font-size: 0.85rem; color: #55556a; }
+.ec-tile-note { font-style: normal; font-size: 0.7rem; color: #6b6b82; }
+
+.ec-spark polyline { fill: none; stroke: #4c6ef5; stroke-width: 1.4; }
+
+.ec-up { color: #69db7c; font-size: 0.78rem; }
+.ec-down { color: #ff6b6b; font-size: 0.78rem; }
+
+.econ .hint { margin-top: 12px; }
+.econ code { font-size: 0.74rem; color: #b9b9cc; }
+
 /* ---------- Страница «История изменений» ---------- */
 
 .changelog {

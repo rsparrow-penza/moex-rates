@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Chart, { localExtrema } from './Chart.jsx'
 import Changelog from './Changelog.jsx'
 import TopBanks from './TopBanks.jsx'
+import Econ from './Econ.jsx'
 import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
 import Inflation from './Inflation.jsx'
@@ -243,6 +244,7 @@ function RatesApp() {
       <CbrForecast />
 
       {/* Справочно: топ-10 банков — активы, капитал, прибыль (указатель ЦБ) */}
+      <Econ />
       <TopBanks />
 
       <table className="table">

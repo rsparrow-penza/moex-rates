@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-COPY app.py .
+COPY app.py econ.py .
 
 # База по умолчанию лежит в /data (том примонтирует compose)
 ENV DATABASE_FILE=/data/rates.db

@@ -4,3 +4,4 @@ flask
 flask-cors
 requests
 apscheduler
+openpyxl          # XLSX-выгрузки ЦБ: средневзвешенные ставки по кредитам и вкладам
