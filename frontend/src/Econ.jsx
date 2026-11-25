@@ -73,7 +73,7 @@ function Spark({ points, width = 120, height = 42, caption = '' }) {
 // Линейный график % для ставок: общая вертикальная шкала.
 // При наведении — вертикальная линия на ближайший месяц и окошко со
 // значением каждого включённого ряда (как на основном графике курсов).
-function LineChart({ series, labels = {} }) {
+export function LineChart({ series, labels = {} }) {
   const svgRef = useRef(null)
   const [tip, setTip] = useState(null)
   const all = series.flatMap((s) => s.points)
@@ -211,7 +211,6 @@ const RATE_CHIPS = [
 export default function Econ({ rangeFrom = '2024-01' }) {
   const [meta, setMeta] = useState([])
   const [series, setSeries] = useState({})          // key -> points
-  const [bonds, setBonds] = useState(null)
   const [budget, setBudget] = useState(null)
   const [keyRate, setKeyRate] = useState([])
   const [picked, setPicked] = useState(RATE_CHIPS.map((c) => c.key))
@@ -233,10 +232,10 @@ export default function Econ({ rangeFrom = '2024-01' }) {
     let retry = null
     const load = async () => {
       try {
-        const [m, b, bg, kr] = await Promise.all([
-          j('/api/econ/meta'), j('/api/econ/bonds'), j('/api/budget'), j('/api/key-rate'),
+        const [m, bg, kr] = await Promise.all([
+          j('/api/econ/meta'), j('/api/budget'), j('/api/key-rate'),
         ])
-        setMeta(m); setBonds(b); setBudget(bg); setKeyRate(kr)
+        setMeta(m); setBudget(bg); setKeyRate(kr)
         const any = await loadSeries()
         // попали на стартовый seed бэкенда (ряды ещё не наполнены) —
         // одна повторная попытка через 20 секунд, без мученического ожидания
@@ -246,12 +245,11 @@ export default function Econ({ rangeFrom = '2024-01' }) {
       }
     }
     load()
-    // Обновление: ОФЗ — планировщик биржи раз в 12 часов, месячные ряды —
-    // ЦБ/Росстат в окна публикаций. Перезапрашиваем каждые полчаса; в том
-    // числе поэтому блок «догоняет» сам, если попал на стартовый seed
-    // бэкенда (пока тот качает History ОФЗ, рядов ещё нет).
+    // Месячные ряды ЦБ/Росстата выкладываются в окна публикаций, планировщик
+    // бэкенда подтягивает их; перезапрашиваем раз в полчаса. Отдельная
+    // попытка догнать нужна, если страница открылась ровно во время
+    // стартового seed (рядов в базе ещё нет).
     const id = setInterval(() => {
-      j('/api/econ/bonds').then(setBonds).catch(() => {})
       j('/api/budget').then(setBudget).catch(() => {})
       loadSeries().catch(() => {})
     }, 30 * 60 * 1000)
@@ -271,12 +269,6 @@ export default function Econ({ rangeFrom = '2024-01' }) {
     const p = series[k]
     return p && p.length ? p[p.length - 1] : null
   }
-
-  // ——— ОФЗ: спред длинного конца к короткому и наклон ———
-  const curve = (bonds?.curve || []).filter((c) => c.yield_prc != null)
-  const shortEnd = curve.length ? curve[0] : null
-  const longEnd = curve.length ? curve[curve.length - 1] : null
-  const slope = shortEnd && longEnd ? longEnd.yield_prc - shortEnd.yield_prc : null
 
   // ——— реальный сектор: плитка ———
   const realTiles = [
@@ -299,8 +291,8 @@ export default function Econ({ rangeFrom = '2024-01' }) {
     <section className="econ" aria-label="Экономика России">
       <h2>📈 Экономика</h2>
       <p className="cf-sub">
-        Ставки для бизнеса и людей · кривая ОФЗ · реальный сектор · бюджет
-        {' · '}данные ЦБ, ММВБ, Росстата
+        Ставки для бизнеса и людей · реальный сектор · федеральный бюджет
+        {' · '}данные ЦБ и Росстата (кривая ОФЗ — на вкладке «ОФЗ»)
       </p>
 
       {/* ——— 1-2. ставки ——— */}
@@ -335,58 +327,8 @@ export default function Econ({ rangeFrom = '2024-01' }) {
         {keyRate.length > 0 && (<>ключевая: <b>{fmt2(keyRate[keyRate.length - 1].rate)}%</b></>)}
       </p>
 
-      {/* ——— 3. ОФЗ ——— */}
-      {curve.length > 0 && (
-        <>
-          <h3 className="ec-title">
-            🧱 Кривая ОФЗ
-            {slope != null && (
-              <span className="ec-slope" title="доходность длинного выпуска минус короткого">
-                наклон {slope >= 0 ? '+' : ''}{fmt1(slope)} п.п.
-              </span>
-            )}
-          </h3>
-          <table className="ec-table">
-            <thead>
-              <tr><th>Выпуск</th><th>Дата выпуска</th><th>Погашение</th><th>Купон, %</th>
-                  <th>Цена, % ном.</th><th>Δ дня</th><th>Доходность</th></tr>
-            </thead>
-            <tbody>
-              {curve.map((c) => (
-                <tr key={c.secid}
-                    title={`Номинал ${fmt1(c.face_rur ?? 1000)} ₽ · НКД ${
-                      c.accrued != null ? fmt2(c.accrued) : '—'
-                    } ₽ · объём выпуска ${
-                      c.issue_size_mlrd != null ? fmt1(c.issue_size_mlrd) : '—'
-                    } млрд ₽ · оборот сегодня ${
-                      c.valtoday_rur != null ? fmt1(c.valtoday_rur / 1e6) : '0'
-                    } млн ₽`}>
-                  <td>{c.shortname}</td>
-                  <td className="ec-mat">{c.issuedate ?? '—'}</td>
-                  <td className="ec-mat">{c.matdate}</td>
-                  <td className="ec-cpn">{c.coupon_prc != null ? `${fmt2(c.coupon_prc)}%` : '—'}</td>
-                  <td className="ec-price">{c.price_prc != null ? fmt2(c.price_prc) : '—'}</td>
-                  <td className={`ec-chg${(c.price_chg_prc ?? 0) > 0 ? ' up' : (c.price_chg_prc ?? 0) < 0 ? ' down' : ''}`}>
-                    {c.price_chg_prc != null ? `${c.price_chg_prc > 0 ? '+' : ''}${fmt2(c.price_chg_prc)}` : '—'}
-                  </td>
-                  <td className="ec-yld">{fmt2(c.yield_prc)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="hint">
-            Доходность к погашению по закрытию ММВБ (борт «Т+: Гособлигации»),
-            снимок {bonds.snap_date}. Цена — последняя сделка в процентах от
-            номинала (1000 ₽); в подсказке строки — НКД, объём выпуска и
-            оборот дня. Наклон кривой — сколько рынок просит
-            сверх коротких ставок за длинные деньги: пологая или перевёрнутая
-            кривая — ожидание быстрого смягчения ЦБ, крутая — что низких
-            ставок в обозримом будущем не будет.
-          </p>
-        </>
-      )}
-
-      {/* ——— 4-5. реальный сектор + розница ——— */}
+            {/* ——— 4-5. реальный сектор + розница ——— */}
+      {/* ——— реальный сектор + розница ——— */}
       <h3 className="ec-title">🏭 Реальный сектор</h3>
       <div className="ec-tiles">
         {realTiles.map((t) => {
@@ -453,7 +395,7 @@ export default function Econ({ rangeFrom = '2024-01' }) {
 
       <p className="hint">
         Ряды обновляются планировщиком: ставки ЦБ — 7–16 числа за прошлый
-        месяц, ОФЗ — каждые 12 часов, Росстат — в течение месяца по мере
+        месяц, Росстат — в течение месяца по мере
         публикации. Всё по отчётности регуляторов и биржи, без оценок «от себя».
       </p>
     </section>

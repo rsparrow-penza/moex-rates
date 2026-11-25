@@ -37,6 +37,32 @@
 }
 .nav-link:hover { text-decoration: underline; }
 
+/* панель тем: страница была простынёй из 12 блоков, теперь четыре вкладки */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #26263a;
+}
+.tab {
+  color: #9a9ab0;
+  font-size: 0.84rem;
+  padding: 5px 12px;
+  border: 1px solid #2b2b3d;
+  border-radius: 999px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tab:hover { color: #f2f2f7; border-color: #4a4a66; }
+.tab-on {
+  color: #f2f2f7;
+  background: #2b2b3d;
+  border-color: #55556a;
+  font-weight: 600;
+}
+
 /* ---------- Фильтры ---------- */
 
 .filters {
@@ -933,14 +959,16 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 
 /* ---------- Экономика (ставки · ОФЗ · реальный сектор · бюджет) ---------- */
 
-.econ {
+.econ,
+.ofz {
   background: #1c1c28;
   border-radius: 14px;
   padding: 14px 18px;
   margin-bottom: 16px;
 }
 
-.econ h2 {
+.econ h2,
+.ofz h2 {
   margin: 0 0 4px;
   font-size: 1.05rem;
   font-weight: 600;
@@ -1058,7 +1086,12 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .ec-up { color: #69db7c; font-size: 0.78rem; }
 .ec-down { color: #ff6b6b; font-size: 0.78rem; }
 
-.econ .hint { margin-top: 12px; }
+.econ .hint,
+.ofz .hint { margin-top: 12px; }
+
+/* строка корзины ОФЗ активна (она же на графике) — клик по строке переключает */
+.ec-table tr.row-on td { background: #23233197; }
+.ec-table tbody tr { cursor: pointer; }
 .econ code { font-size: 0.74rem; color: #b9b9cc; }
 
 /* ---------- Страница «История изменений» ---------- */

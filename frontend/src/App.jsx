@@ -14,6 +14,7 @@ import Changelog from './Changelog.jsx'
 import TopBanks from './TopBanks.jsx'
 import Econ from './Econ.jsx'
 import Metals from './Metals.jsx'
+import Ofz from './Ofz.jsx'
 import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
 import Inflation from './Inflation.jsx'
@@ -67,7 +68,28 @@ const thUnit = (c) => (ASSET_CODES.includes(c) ? '$' : '₽')
 // можно одной строкой.
 const EXCHANGE_CODES = ['USD', 'EUR', 'CNY']
 
-function RatesApp() {
+// Темы страницы — четыре вкладки. Разделяем по источнику и по вопросу, на
+// который блок отвечает: цены инструментов (ММВБ/Yahoo), решения регулятора
+// и банковская отчётность (ЦБ), макро ряды (ЦБ/Росстат), долг (ММВБ).
+const TABS = [
+  { id: 'fx', label: '💱 Курсы валют' },
+  { id: 'cbr', label: '🏦 ЦБ: ставка, прогноз, банки' },
+  { id: 'econ', label: '📈 Экономика' },
+  { id: 'ofz', label: '🧱 ОФЗ' },
+]
+
+function TabBar({ tab }) {
+  return (
+    <nav className="tabs" aria-label="Разделы страницы">
+      {TABS.map((t) => (
+        <a key={t.id} href={`#/${t.id}`} className={t.id === tab ? 'tab tab-on' : 'tab'}
+           aria-current={t.id === tab ? 'page' : undefined}>{t.label}</a>
+      ))}
+    </nav>
+  )
+}
+
+function RatesApp({ tab = 'fx' }) {
   const [meta, setMeta] = useState([])              // справочник с сервера
   const [from, setFrom] = useState(dateMinus(30))
   const [to, setTo] = useState(dateMinus(0))
@@ -80,8 +102,9 @@ function RatesApp() {
   //             'rub' — абсолютные рубли (каждая валюта на своей полоске)
   const [mode, setMode] = useState('pct')
 
-  // Справочник валют грузим один раз
+  // Справочник валют грузим один раз (он нужен только валютной вкладке)
   useEffect(() => {
+    if (tab !== 'fx') return
     fetch('/api/currencies')
       .then((r) => r.json())
       .then((all) => {
@@ -90,7 +113,7 @@ function RatesApp() {
         setPicked(list.map((m) => m.code))
       })
       .catch(() => setError('Бэкенд недоступен. Запустите: python3 app.py'))
-  }, [])
+  }, [tab])
 
   const load = useCallback(async () => {
     if (!picked) return                 // справочник ещё не приехал
@@ -111,11 +134,11 @@ function RatesApp() {
   // Грузим сами и каждые 5 минут: планировщик дописывает точки (OTC — каждые
   // ~15 минут на стороне источника), страница должна «жить» без перезагрузки.
   useEffect(() => {
-    if (!picked) return
+    if (tab !== 'fx' || !picked) return
     load()
     const timer = setInterval(load, 5 * 60 * 1000)
     return () => clearInterval(timer)
-  }, [load, picked])
+  }, [load, picked, tab])
 
   // новый период или новый набор инструментов — снова показываем 10 свежих
   useEffect(() => { setRowsShown(10) }, [from, to, picked])
@@ -193,7 +216,7 @@ function RatesApp() {
     return out
   }, [byDate, tableCodes])
 
-  if (!meta.length) return <div className="app"><h1>Загрузка…</h1></div>
+  if (tab === 'fx' && !meta.length) return <div className="app"><h1>Загрузка…</h1></div>
 
   return (
     <div className="app">
@@ -201,30 +224,41 @@ function RatesApp() {
         <h1>📊 Курсы валют, ставка ЦБ и прочее</h1>
         <a className="nav-link" href="#/changelog">История изменений →</a>
       </div>
-      <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
-        Brent и Gold — в таблице дневными закрытиями в $; Bitcoin — только график</p>
+
+      {/* Страница разбита на темы: раньше всё шло одной простынёй, и чтобы
+          добраться до ставок по кредитам, нужно было проскроллить валюты */}
+      <TabBar tab={tab} />
 
       {error && <div className="error">{error}</div>}
 
-      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
-      <KeyRate />
+      {tab === 'cbr' && (
+        <>
+          {/* Всё, что решает и объясняет регулятор: ставка → даты заседаний →
+              инфляция (ради которой ставка) → прогноз → банковский сектор */}
+          <KeyRate />
+          <CbrCalendar />
+          <Inflation />
+          <CbrForecast />
+          <TopBanks />
+        </>
+      )}
 
-      {/* Даты заседаний — сразу за ставкой: это продолжение того же сюжета
-          (когда ЦБ решал и что решит дальше), а не отдельная справка */}
-      <CbrCalendar />
+      {/* Макро: ставки для бизнеса и людей, реальный сектор, бюджет */}
+      {tab === 'econ' && <Econ />}
 
-      {/* Инфляция — естественный сосед ставки: именно она диктует решения ЦБ */}
-      <Inflation />
+      {/* Доллевой рынок: кривая ОФЗ и её история */}
+      {tab === 'ofz' && <Ofz />}
 
-      {/* Справочно: траектория ставки по сценариям среднесрочного прогноза ЦБ */}
-      <CbrForecast />
+      {tab === 'fx' && (
+        <>
+      <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
+        Brent и Gold — в таблице дневными закрытиями в $; Bitcoin — только график</p>
 
-      {/* Биржевые цены на металлы: ФОРТС + мир, рядом с экономикой */}
+      {/* Биржевые цены на металлы: ФОРТС + мир — тот же рынок инструментов,
+          что валюты и нефть, поэтому едет сюда */}
       <Metals />
 
-      {/* Валютный виджет (фильтры → график → дневная таблица) переехал
-          сюда, к «Экономике»: справочные блоки ЦБ теперь сверху, рабочий
-          инструмент — одной связкой с макроданными */}
+      {/* Валютный виджет: фильтры → график → дневная таблица */}
       <div className="filters">
         <label>
           с <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
@@ -312,27 +346,30 @@ function RatesApp() {
         </button>
       )}
 
-      {/* Справочно: топ-10 банков — активы, капитал, прибыль (указатель ЦБ) */}
-      <Econ />
-      <TopBanks />
+        </>
+      )}
 
     </div>
   )
 }
 
-// --- Мини-роутинг по хешу: #/changelog — страница истории изменений ---
-// Библиотека не нужна: адресов два, достаточно слушать hashchange.
+// --- Мини-роутинг по хешу: #/<вкладка> и #/changelog ---
+// Библиотека не нужна: адресов пять, достаточно слушать hashchange.
+// Незнакомый или пустой хеш — валютная вкладка (исторически главный экран).
+
+const TAB_IDS = TABS.map((t) => t.id)
 
 export default function Router() {
-  const [page, setPage] = useState(() => window.location.hash)
+  const [hash, setHash] = useState(() => window.location.hash)
   useEffect(() => {
     const onHash = () => {
-      setPage(window.location.hash)
+      setHash(window.location.hash)
       window.scrollTo(0, 0)
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  if (page === '#/changelog') return <Changelog />
-  return <RatesApp />
+  if (hash === '#/changelog') return <Changelog />
+  const tab = hash.replace(/^#\/?/, '')
+  return <RatesApp tab={TAB_IDS.includes(tab) ? tab : 'fx'} />
 }
