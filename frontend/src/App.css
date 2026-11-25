@@ -856,6 +856,62 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .tb-th-tip.tb-tip-align-right::after { left: auto; right: 0; transform: translateX(0); }
 
 
+/* ---------- Металлы на бирже (ФОРТС + мир) ---------- */
+
+.metals {
+  background: #1c1c28;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.metals h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f2f7;
+}
+.mt-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.mt-table th {
+  text-align: right;
+  color: #9a9ab0;
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-bottom: 1px solid #33334a;
+  white-space: nowrap;
+}
+.mt-table th:nth-child(1), .mt-table th:nth-child(2) { text-align: left; }
+.mt-table td {
+  text-align: right;
+  color: #f2f2f7;
+  padding: 6px 8px;
+  border-bottom: 1px solid #26263a;
+  font-variant-numeric: tabular-nums;
+}
+.mt-name { text-align: left !important; font-weight: 600; white-space: nowrap; }
+.mt-name em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: #6b6b82;
+  margin-left: 6px;
+}
+.mt-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.mt-ct { text-align: left !important; color: #b9b9cc; font-size: 0.78rem; white-space: nowrap; }
+.mt-price { font-weight: 600; }
+.mt-world, .mt-basis { color: #c7c7d8; }
+.mt-chg.up, .mt-basis.up { color: #69db7c; }
+.mt-chg.down, .mt-basis.down { color: #ff6b6b; }
+.mt-gram { color: #8fd3c7; }
+.mt-empty { color: #55556a; }
+.mt-spark polyline { fill: none; stroke-width: 1.4; }
+
 /* ---------- Экономика (ставки · ОФЗ · реальный сектор · бюджет) ---------- */
 
 .econ {

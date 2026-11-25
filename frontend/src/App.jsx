@@ -13,6 +13,7 @@ import Chart, { localExtrema } from './Chart.jsx'
 import Changelog from './Changelog.jsx'
 import TopBanks from './TopBanks.jsx'
 import Econ from './Econ.jsx'
+import Metals from './Metals.jsx'
 import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
 import Inflation from './Inflation.jsx'
@@ -201,8 +202,25 @@ function RatesApp() {
 
       {error && <div className="error">{error}</div>}
 
-      {/* Панель фильтров и график курсов — на самом верху: рабочий инструмент
-          страницы, справочные блоки ЦБ ушли под них */}
+      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
+      <KeyRate />
+
+      {/* Даты заседаний — сразу за ставкой: это продолжение того же сюжета
+          (когда ЦБ решал и что решит дальше), а не отдельная справка */}
+      <CbrCalendar />
+
+      {/* Инфляция — естественный сосед ставки: именно она диктует решения ЦБ */}
+      <Inflation />
+
+      {/* Справочно: траектория ставки по сценариям среднесрочного прогноза ЦБ */}
+      <CbrForecast />
+
+      {/* Биржевые цены на металлы: ФОРТС + мир, рядом с экономикой */}
+      <Metals />
+
+      {/* Валютный виджет (фильтры → график → дневная таблица) переехал
+          сюда, к «Экономике»: справочные блоки ЦБ теперь сверху, рабочий
+          инструмент — одной связкой с макроданными */}
       <div className="filters">
         <label>
           с <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
@@ -249,22 +267,6 @@ function RatesApp() {
       {Object.values(chartSeries).some((s) => s.length > 1) &&
         <Chart series={chartSeries} labels={LABELS} mode={mode} />}
 
-      {/* Ключевая ставка — отдельным блоком: свои данные, своя шкала (%) */}
-      <KeyRate />
-
-      {/* Инфляция — естественный сосед ставки: именно она диктует решения ЦБ */}
-      <Inflation />
-
-      {/* Справочно: даты заседаний ЦБ по ключевой ставке на текущий год */}
-      <CbrCalendar />
-
-      {/* Справочно: траектория ставки по сценариям среднесрочного прогноза ЦБ */}
-      <CbrForecast />
-
-      {/* Справочно: топ-10 банков — активы, капитал, прибыль (указатель ЦБ) */}
-      <Econ />
-      <TopBanks />
-
       <table className="table">
         <thead>
           <tr>
@@ -292,6 +294,11 @@ function RatesApp() {
           ))}
         </tbody>
       </table>
+
+      {/* Справочно: топ-10 банков — активы, капитал, прибыль (указатель ЦБ) */}
+      <Econ />
+      <TopBanks />
+
     </div>
   )
 }

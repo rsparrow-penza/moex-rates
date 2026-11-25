@@ -1191,6 +1191,38 @@ def econ_real_update():
     return jsonify({"ok": True, "count": len(rows)})
 
 
+@app.route("/api/metals", methods=["GET"])
+def metals():
+    """
+    GET /api/metals — биржевые цены на драгметаллы: ближайшие контракты
+    ФОРТС (MOEX, $ за тройскую унцию) и мировые COMEX/NYMEX (Yahoo).
+    Отдаёт ряды по датам (forts/world могут расходиться на один день:
+    ФОРТС живёт по московскому дню, COMEX — по американскому), контрактную
+    арифметику считает фронт.
+    """
+    with get_db() as db:
+        contracts = db.execute(
+            "SELECT metal, secid, shortname, lasttrade, seen_at FROM metal_contract"
+            " ORDER BY metal").fetchall()
+        series = {}
+        for m in econ.METALS:
+            dates = set()
+            vals = {}
+            for kind in ("forts", "world"):
+                rows = db.execute(
+                    "SELECT period, value FROM econ_series WHERE key = ? ORDER BY period",
+                    (f"metal_{m['metal']}_{kind}",)).fetchall()
+                for r in rows:
+                    dates.add(r["period"])
+                    vals.setdefault(r["period"], {})[kind] = r["value"]
+            series[m["metal"]] = [{"date": d, **vals[d]} for d in sorted(dates)]
+    return jsonify({
+        "metals": [{k: v for k, v in m.items()} for m in econ.METALS],
+        "contracts": [dict(c) for c in contracts],
+        "series": series,
+    })
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Для дашбордов и себя: жив ли сервис и что в базе."""

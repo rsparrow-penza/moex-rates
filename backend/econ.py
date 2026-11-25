@@ -37,7 +37,7 @@ import io
 import json
 import sqlite3
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -549,6 +549,134 @@ def fetch_ofz_info():
 
 
 # ---------------------------------------------------------------------------
+# Металлы на бирже: ФОРТС (MOEX, $ за унцию) + мировые COMEX/NYMEX (Yahoo)
+# ---------------------------------------------------------------------------
+#
+# ФОРТС торгует драгметаллами квартальными фьючерсами: GOLD (большой, ~100
+# унций), SILV, PLT (платина), PLD (палладий) — котировка в $ за тройскую
+# унцию, поэтому ряд напрямую сравним с COMEX/NYMEX. Контракт живёт квартал,
+# «ближайший» каждый день ищем заново по дате последней торговли: когда
+# GDZ6 переедет, ряд продолжится новым контрактом (в месте переклейки возможен
+# скачок уровня на величину контанго — это честно, а не ошибка).
+#
+# Валютный спот-рынок ММВБ (ГЦМ) через ISS снаружи не отдаёт котировки —
+# поэтому ФОРТС, а не «спот на слитки».
+
+METALS = [
+    dict(metal="AU", label="Золото", prefix="GOLD",   world="GC=F", world_label="COMEX"),
+    dict(metal="AG", label="Серебро", prefix="SILV",  world="SI=F", world_label="COMEX"),
+    dict(metal="PT", label="Платина", prefix="PLT",   world="PL=F", world_label="NYMEX"),
+    dict(metal="PD", label="Палладий", prefix="PLD",  world="PA=F", world_label="NYMEX"),
+]
+
+FORTS_LIST_URL = "http://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
+FORTS_HISTORY_URL = "http://iss.moex.com/iss/history/engines/futures/markets/forts/securities/{secid}.json"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+METALS_DAYS = 150          # глубина истории: ~полгода торговых дней
+
+
+def pick_forts_contract(rows, cols, today):
+    """
+    Из списка инструментов ФОРТС — ближайшие НЕ истёкшие контракты по каждому
+    префиксу металла: {prefix: (secid, shortname, lasttrade)}.
+    """
+    i_sn, i_last, i_sec = (cols.index(c) for c in ("SHORTNAME", "LASTTRADEDATE", "SECID"))
+    best = {}
+    for r in rows:
+        sn = r[i_sn] or ""
+        prefix = sn.split("-")[0]
+        if prefix not in {m["prefix"] for m in METALS}:
+            continue
+        last = r[i_last] or ""
+        if last < today:                    # истёкший — не берём
+            continue
+        cur = best.get(prefix)
+        if cur is None or last < cur[2]:
+            best[prefix] = (r[i_sec], sn, last)
+    return best
+
+
+def fetch_metals(days: int = METALS_DAYS):
+    """
+    Дневные ряды металлов: ФОРТС (CLOSE фьючерса, $/унция) и мир (Yahoo
+    GC=F/SI=F/PL=F/PA=F). Ключи econ_series: metal_<AU|AG|PT|PD>_forts и
+    metal_<...>_world. Возвращает число записей.
+    """
+    if _http_json is None:
+        return 0
+    today = date.today().isoformat()
+    listing = _http_json(_moex(FORTS_LIST_URL), params={
+        "iss.meta": "off", "limit": 0,
+        "securities.columns": "SECID,SHORTNAME,LASTTRADEDATE"})
+    picked = pick_forts_contract(listing["securities"]["data"],
+                                 listing["securities"]["columns"], today)
+    since = (date.today() - timedelta(days=days)).isoformat()
+    n = 0
+    rows_saved = []
+    with _conn() as db:
+        for m in METALS:
+            sel = picked.get(m["prefix"])
+            if not sel:
+                print(f"[metals] {m['label']}: на ФОРТС нет живого контракта")
+                continue
+            secid, shortname, lasttrade = sel
+            db.execute(
+                "INSERT OR REPLACE INTO metal_contract (metal, secid, shortname, lasttrade, seen_at)"
+                " VALUES (?,?,?,?,?)", (m["metal"], secid, shortname, lasttrade, today))
+            # ISS режет историю по 100 строк на страницу (проверено: 150 дней
+            # = 100 строк и обрыв), поэтому идём страницами через start=
+            start, hc = 0, None
+            while True:
+                hist = _http_json(_moex(FORTS_HISTORY_URL.format(secid=secid)), params={
+                    "iss.meta": "off", "iss.only": "history",
+                    "history.columns": "TRADEDATE,CLOSE,VOLUME",
+                    "from": since, "till": today, "start": start})
+                hc = hist["history"]["columns"]
+                page = hist["history"]["data"]
+                if not page:
+                    break
+                for row in page:
+                    v = row[hc.index("CLOSE")]
+                    if isinstance(v, (int, float)) and v > 0:
+                        db.execute(
+                            "INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
+                            (f"metal_{m['metal']}_forts", row[hc.index("TRADEDATE")], float(v)))
+                        n += 1
+                if len(page) < 100:
+                    break
+                start += len(page)
+            # мир: тот же Yahoo-endpoint, что качает Brent/Gold
+            y = _http_json(YAHOO_CHART_URL.format(ticker=m["world"]),
+                           params={"interval": "1d", "range": f"{days}d"})
+            res = y["chart"]["result"][0]
+            stamps = res.get("timestamp", [])
+            closes = res["indicators"]["quote"][0].get("close", [])
+            for ts, price in zip(stamps, closes):
+                if not isinstance(price, (int, float)) or price <= 0:
+                    continue
+                d = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+                db.execute("INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
+                           (f"metal_{m['metal']}_world", d, float(price)))
+                n += 1
+            # живая котировка перекрывает дневную строку сегодняшнего дня:
+            # COMEX торгует почти круглосуточно, «закрытие» в течение дня —
+            # это последняя сделка
+            meta = res.get("meta", {}) or {}
+            live = meta.get("regularMarketPrice")
+            if isinstance(live, (int, float)) and live > 0:
+                ts = meta.get("regularMarketTime")
+                day = (datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+                       if ts else today)
+                db.execute("INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
+                           (f"metal_{m['metal']}_world", day, float(live)))
+                n += 1
+            rows_saved.append((m["label"], shortname, secid))
+    print(f"[metals] записано {n} значений; контракты: "
+          + ", ".join(f"{lbl}={sn}" for lbl, sn, _ in rows_saved))
+    return n
+
+
+# ---------------------------------------------------------------------------
 # Бюджет и розница — ручные срезы (POST /api/budget, /api/econ/real)
 # ---------------------------------------------------------------------------
 
@@ -609,6 +737,16 @@ def init_econ_db():
             db.execute("ALTER TABLE ofz_info RENAME COLUMN issue_size_blrd TO issue_size_mlrd")
         db.execute(
             """
+            CREATE TABLE IF NOT EXISTS metal_contract (
+                metal     TEXT PRIMARY KEY,   -- AU | AG | PT | PD
+                secid     TEXT NOT NULL,      -- GDZ6, SVZ6, PTZ6, PLDZ6...
+                shortname TEXT NOT NULL,      -- GOLD-12.26
+                lasttrade TEXT,               -- дата последней торговли контракта
+                seen_at   TEXT NOT NULL       -- когда мы его выбрали
+            )
+            """)
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS budget_rows (
                 period TEXT NOT NULL,      -- '2026-09' (накоплено с начала года)
                 field  TEXT NOT NULL,      -- BUDGET_FIELDS
@@ -656,9 +794,18 @@ def register_jobs(scheduler):
         except Exception as e:
             print(f"[econ/ofz] сбой: {e}")
 
+    def job_metals():
+        # фьючерсы торгуются с утра до вечера; 1D-ряд обновляется и ночью,
+        # но переклейка контракта видна только на дневном срезе
+        try:
+            fetch_metals(days=30)
+        except Exception as e:
+            print(f"[metals] сбой: {e}")
+
     scheduler.add_job(job_rates, "interval", hours=12, id="econ_rates")
     scheduler.add_job(job_real, "interval", hours=24, id="econ_real")
     scheduler.add_job(job_ofz, "interval", hours=12, id="econ_ofz")
+    scheduler.add_job(job_metals, "interval", hours=6, id="econ_metals")
 
 
 def econ_seed():
@@ -676,6 +823,7 @@ def econ_seed():
         need_info = not has("SELECT COUNT(*) FROM ofz_info")
         need_rates = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'rate_%'")
         need_real = not has("SELECT COUNT(*) FROM econ_series WHERE key IN ('ippe_idx','unemp_rate')")
+        need_metals = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'metal_%'")
 
     if need_bonds:
         try:
@@ -701,3 +849,8 @@ def econ_seed():
             fetch_rosstat_real()
         except Exception as e:
             print(f"[econ/seed] real: {e}")
+    if need_metals:
+        try:
+            fetch_metals()
+        except Exception as e:
+            print(f"[econ/seed] metals: {e}")

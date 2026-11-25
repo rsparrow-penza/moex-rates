@@ -203,5 +203,85 @@ class TestRosstatParsers(unittest.TestCase):
         self.assertFalse(econ._insecure("https://iss.moex.com/iss/x.json"))
 
 
+class TestMetals(unittest.TestCase):
+    """ФОРТС: выбор ближайшего живого контракта и цены металлов."""
+
+    COLS = ["SECID", "SHORTNAME", "LASTTRADEDATE"]
+    ROWS = [
+        ["GDZ6", "GOLD-12.26", "2026-12-18"],      # ближайший живой
+        ["GDH7", "GOLD-3.27", "2027-03-19"],       # дальше по сроку
+        ["GNZ6", "GOLDM-12.26", "2026-12-18"],     # префикс GOLDM — не GOLD
+        ["SVZ6", "SILV-12.26", "2026-12-18"],
+        ["PTZ6", "PLT-12.26", "2026-12-18"],
+        ["PDZ6", "PLD-12.26", "2026-12-18"],
+        ["GDQ1", "GOLD-3.26", "2026-03-19"],       # истёкший — мимо
+        ["MXL6", "MOEX-12.26", "2026-12-18"],      # не металл
+    ]
+
+    def test_picks_nearest_alive_contract_per_metal(self):
+        picked = econ.pick_forts_contract(self.ROWS, self.COLS, today="2026-11-25")
+        self.assertEqual(picked["GOLD"], ("GDZ6", "GOLD-12.26", "2026-12-18"))
+        self.assertEqual(set(picked), {"GOLD", "SILV", "PLT", "PLD"})   # GOLDM не подмешался
+
+    def test_expired_contracts_ignored(self):
+        self.assertEqual(econ.pick_forts_contract(
+            [["GDQ1", "GOLD-3.26", "2026-03-19"]], self.COLS, "2026-11-25"), {})
+
+    LIVE = {"securities": {"columns": ["SECID", "SHORTNAME", "LASTTRADEDATE"],
+                           "data": [["GDZ6", "GOLD-12.26", "2026-12-18"]]},
+            "marketdata": {"columns": ["SECID"], "data": []}}
+    HIST = {"history": {"columns": ["TRADEDATE", "CLOSE", "VOLUME"],
+                        "data": [["2026-11-24", 3577.8, 1], ["2026-11-25", 3568.9, 2]]}}
+    YAHOO = {"chart": {"result": [{"timestamp": [1764000000],
+                                   "indicators": {"quote": [{"close": [3561.9]}]},
+                                   "meta": {"regularMarketPrice": 3558.5,
+                                            "regularMarketTime": 1764100000}}]}}
+
+    def _answer(self, url, params=None):
+        if "forts/securities.json" in url:
+            return self.LIVE
+        if "history/engines/futures" in url:
+            return self.HIST
+        if "query1.finance.yahoo.com" in url:
+            return self.YAHOO
+        raise AssertionError("неожиданный url " + url)
+
+    def test_fetch_metals_writes_both_rows(self):
+        econ.METALS_BAK = econ.METALS
+        econ.METALS = [dict(metal="AU", label="Золото", prefix="GOLD",
+                            world="GC=F", world_label="COMEX")]
+        try:
+            with mock.patch.object(rates, "http_get_json", side_effect=self._answer):
+                n = econ.fetch_metals(days=30)
+            self.assertGreaterEqual(n, 3)
+            with rates.get_db() as db:
+                forts = db.execute("SELECT period, value FROM econ_series WHERE key = 'metal_AU_forts'"
+                                   " ORDER BY period").fetchall()
+                world = db.execute("SELECT value FROM econ_series WHERE key = 'metal_AU_world'"
+                                   " ORDER BY period DESC LIMIT 1").fetchone()
+                ct = db.execute("SELECT secid, shortname FROM metal_contract WHERE metal = 'AU'").fetchone()
+            self.assertEqual([dict(r) for r in forts][0]["value"], 3577.8)
+            self.assertEqual(world["value"], 3558.5)        # живая котировка перекрывает закрытие
+            self.assertEqual((ct["secid"], ct["shortname"]), ("GDZ6", "GOLD-12.26"))
+        finally:
+            econ.METALS = econ.METALS_BAK
+            del econ.METALS_BAK
+
+
+class TestMetalsEndpoint(unittest.TestCase):
+    def test_api_metals_shape(self):
+        with rates.get_db() as db:
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('metal_AU_forts','2026-11-24',3577.8)")
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('metal_AU_forts','2026-11-25',3568.9)")
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('metal_AU_world','2026-11-25',3558.5)")
+            db.execute("INSERT OR REPLACE INTO metal_contract VALUES ('AU','GDZ6','GOLD-12.26','2026-12-18','2026-11-25')")
+        body = rates.app.test_client().get("/api/metals").json
+        au = [p for p in body["series"]["AU"] if p["date"] == "2026-11-25"][0]
+        self.assertEqual(au["forts"], 3568.9)
+        self.assertEqual(au["world"], 3558.5)
+        self.assertEqual(body["contracts"][0]["shortname"], "GOLD-12.26")
+        self.assertEqual(body["metals"][0]["label"], "Золото")
+
+
 if __name__ == "__main__":
     unittest.main()
