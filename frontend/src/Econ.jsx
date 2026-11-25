@@ -103,7 +103,7 @@ function LineChart({ series, labels = {} }) {
     const cssX = (x(stamp(best)) / W) * rect.width   // px уже занят: координата viewBox
     const flip = cssX > rect.width * 0.55
     // Правая половина графика — ставим окно ЛЕВЕЕ курсора (иначе оно
-    // залезает за край карточки и обрезатья): translateX(-100%) от точки.
+    // залезает за край карточки и обрезается): translateX(-100%) от точки.
     setTip({
       month: best, rows, lineX: x(stamp(best)), flip,
       cx: flip ? cssX - 12 : cssX + 12,
@@ -325,7 +325,7 @@ export default function Econ({ rangeFrom = '2024-01' }) {
       {curve.length > 0 && (
         <>
           <h3 className="ec-title">
-            🧱 Крива ОФЗ
+            🧱 Кривая ОФЗ
             {slope != null && (
               <span className="ec-slope" title="доходность длинного выпуска минус короткого">
                 наклон {slope >= 0 ? '+' : ''}{fmt1(slope)} п.п.
