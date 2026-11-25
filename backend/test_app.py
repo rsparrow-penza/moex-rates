@@ -460,5 +460,19 @@ class TestInflation(unittest.TestCase):
         self.assertEqual(len(rates.app.test_client().get("/api/inflation?from=2000").json), 2)
 
 
+class TestDbConnection(unittest.TestCase):
+    """Одна SQLite-база на планировщик, seed и API: без ожидания блокировки
+    часовой обход падает с «database is locked» (это и было багом)."""
+
+    def test_busy_timeout_is_set(self):
+        with rates.get_db() as db:
+            self.assertEqual(db.execute("PRAGMA busy_timeout").fetchone()[0], 15000)
+
+    def test_wal_requested_at_init(self):
+        mode = rates.get_db().execute("PRAGMA journal_mode").fetchone()[0]
+        # сетевой том может не потянуть WAL — тогда delete, но не «off»
+        self.assertIn(mode.lower(), ("wal", "delete"))
+
+
 if __name__ == "__main__":
     unittest.main()

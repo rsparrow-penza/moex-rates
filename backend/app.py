@@ -211,7 +211,17 @@ def moex_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
+    """
+    Одно соединение к базе. Планировщик (отдельный поток), seed и обработчики
+    HTTP живут с одной SQLite-файлом, поэтому:
+      • timeout/busy_timeout — по умолчанию SQLite ждёт чужую блокировку 0
+        секунд и сразу бросает «database is locked» — ловили в логах на
+        часовом обходе ЦБ, когда seed ещё дописывал ряды);
+      • WAL выставляется один раз в init_db() и остаётся в файле базы:
+        читатели не блокируют писателя.
+    """
+    conn = sqlite3.connect(DB_FILE, timeout=15)
+    conn.execute("PRAGMA busy_timeout = 15000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -227,6 +237,12 @@ def init_db():
     таблице, не мешая друг другу, и их можно рисовать двумя линиями.
     """
     with get_db() as db:
+        # WAL: часовая запись перестала блокировать чтение из API. Если
+        # файловая система его не поддерживает (сетевой том), SQLite сама
+        # останется в journal_mode=delete — это не ошибка.
+        mode = db.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+        if mode and mode.lower() != "wal":
+            print(f"бд: WAL недоступен ({mode}), работаем в штатном режиме")
         # Есть ли уже таблица? Нужна ли миграция (старая схема без source)?
         cols = [r["name"] for r in db.execute("PRAGMA table_info(rates)")]
         if cols and "source" not in cols:
