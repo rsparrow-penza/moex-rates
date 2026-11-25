@@ -507,6 +507,19 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   font-variant-numeric: tabular-nums;
 }
 
+.ec-chartwrap .chart-tip {
+  min-width: 300px;              /* подписи рядов ставок длинные — не дробим */
+}
+
+.ec-chartwrap .tip-row span { white-space: nowrap; }
+
+.chart-tip .tip-row b em {
+  font-style: normal;
+  font-size: 0.72rem;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
 .tip-row b {
   margin-left: auto;
   color: #f2f2f7;
@@ -905,10 +918,14 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .ec-chip.on { color: #f2f2f7; border-color: #4a4a66; }
 .ec-chip.on::before { opacity: 1; }
 
-.ec-chart { width: 100%; height: auto; }
+.ec-chartwrap { position: relative; }        /* привязка окошка подсказки */
+.ec-chart { width: 100%; height: auto; cursor: crosshair; }
+.ec-hover-dot { stroke: #1c1c28; stroke-width: 1.2; }
 .ec-chart polyline { fill: none; stroke-width: 1.8; }
 .ec-guide { stroke: #2b2b3d; stroke-width: 1; }
 .ec-label { fill: #77778b; font-size: 10px; }
+
+.ec-mini-hint { margin: 4px 0 0; font-size: 0.74rem; color: #6b6b82; }
 
 .ec-mini-note { margin: 6px 0 0; font-size: 0.8rem; color: #9a9ab0; }
 .ec-mini-note b { color: #f2f2f7; font-weight: 600; }

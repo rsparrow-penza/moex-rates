@@ -14,7 +14,7 @@
 // Компактный формат: чипы-фильтры для ставок, таблица для ОФЗ, плитка
 // «значение + г/г + спарклайн» для реального сектора, таблица бюджета.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const W = 720
 const PAD = { top: 12, right: 14, bottom: 20, left: 46 }
@@ -39,21 +39,29 @@ function yoy(points, months = 12) {
 }
 
 // Спарклайн: маленькая линия без осей, для плитки реального сектора
-function Spark({ points, width = 120, height = 30 }) {
+function Spark({ points, width = 120, height = 30, caption = '' }) {
   if (!points || points.length < 2) return null
   const vals = points.map((p) => p.value)
   const lo = Math.min(...vals), hi = Math.max(...vals)
+  // подсказка наведения: чем дышал ряд на показанном окне
+  const info = `${caption} · ${points[0].period}—${points[points.length - 1].period}: `
+    + `мин ${fmt1(lo)}, макс ${fmt1(hi)}, сейчас ${fmt1(vals[vals.length - 1])}`
   const x = (i) => (i / (points.length - 1)) * (width - 2) + 1
   const y = (v) => height - 2 - ((v - lo) / (hi - lo || 1)) * (height - 4)
   return (
     <svg width={width} height={height} className="ec-spark">
+      <title>{info}</title>
       <polyline points={points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} />
     </svg>
   )
 }
 
-// Линейный график % для ставок: общая вертикальная шкала
-function LineChart({ series }) {
+// Линейный график % для ставок: общая вертикальная шкала.
+// При наведении — вертикальная линия на ближайший месяц и окошко со
+// значением каждого включённого ряда (как на основном графике курсов).
+function LineChart({ series, labels = {} }) {
+  const svgRef = useRef(null)
+  const [tip, setTip] = useState(null)
   const all = series.flatMap((s) => s.points)
   if (all.length < 2) return null
   const t0 = Math.min(...all.map((p) => stamp(p.period)))
@@ -65,43 +73,116 @@ function LineChart({ series }) {
   const x = (t) => PAD.left + ((t - t0) / (t1 - t0 || 1)) * (W - PAD.left - PAD.right)
   const y = (v) => PAD.top + (1 - (v - yLo) / (yHi - yLo)) * (220 - PAD.top - PAD.bottom)
 
+  // все месяцы, которые есть хотя бы у одной серии, — по ним и щёлкает наведение
+  const months = [...new Set(all.map((p) => p.period))].sort()
+  const valueAt = new Map(series.map((s) => [s.key, new Map(s.points.map((p) => [p.period, p.value]))]))
+
+  const onMove = (e) => {
+    const rect = svgRef.current.getBoundingClientRect()
+    const px = ((e.clientX - rect.left) / rect.width) * W
+    const ratio = (px - PAD.left) / (W - PAD.left - PAD.right)
+    if (ratio < -0.02 || ratio > 1.02) { setTip(null); return }
+    const ts = t0 + ratio * (t1 - t0)
+    // ближайший месяц по оси времени
+    let best = months[0]
+    for (const m of months)
+      if (Math.abs(stamp(m) - ts) < Math.abs(stamp(best) - ts)) best = m
+    // рядом с текущим значением — насколько оно выше/ниже того же месяца
+    // прошлого года (в процентных пунктах): «18,11% · +2,30 п.п. г/г»
+    const prevYear = (m) => `${+m.slice(0, 4) - 1}${m.slice(4)}`
+    const rows = series
+      .map((s) => {
+        const map = valueAt.get(s.key)
+        const value = map.get(best)
+        const then = map.get(prevYear(best))
+        return { key: s.key, color: s.color, label: labels[s.key] ?? s.label, value, yoy: then != null ? value - then : null }
+      })
+      .filter((r) => r.value != null)
+      .sort((a, b) => b.value - a.value)
+    if (!rows.length) { setTip(null); return }
+    const cssX = (x(stamp(best)) / W) * rect.width   // px уже занят: координата viewBox
+    const flip = cssX > rect.width * 0.55
+    // Правая половина графика — ставим окно ЛЕВЕЕ курсора (иначе оно
+    // залезает за край карточки и обрезатья): translateX(-100%) от точки.
+    setTip({
+      month: best, rows, lineX: x(stamp(best)), flip,
+      cx: flip ? cssX - 12 : cssX + 12,
+      cy: Math.max(8, Math.min(e.clientY - rect.top + 14,
+                               rect.height - 30 - 26 * rows.length)),
+    })
+  }
+
   // подписи годовщин: каждый январь
   const years = []
   const seen = new Set()
-  series[0].points.forEach((p) => {
-    if (p.period.slice(5, 7) === '01' && !seen.has(p.period.slice(0, 4))) {
-      seen.add(p.period.slice(0, 4)); years.push(p)
-    }
+  months.forEach((m) => {
+    if (m.slice(5, 7) === '01' && !seen.has(m.slice(0, 4))) { seen.add(m.slice(0, 4)); years.push(m) }
   })
 
   const H = 220
+  const MONTS_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+  const monthLabel = (m) => `${MONTS_RU[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="ec-chart">
-      {[yHi - (yHi - yLo) * 0.1, (yLo + yHi) / 2, lo].map((v, i) => (
-        <g key={i}>
-          <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} className="ec-guide" />
-          <text x={PAD.left - 6} y={y(v) + 3} textAnchor="end" className="ec-label">{fmt1(v)}</text>
-        </g>
-      ))}
-      {years.map((p) => (
-        <g key={p.period}>
-          <line x1={x(stamp(p.period))} x2={x(stamp(p.period))} y1={PAD.top} y2={H - PAD.bottom} className="ec-guide" />
-          <text x={x(stamp(p.period))} y={H - 6} textAnchor="middle" className="ec-label">{p.period.slice(0, 4)}</text>
-        </g>
-      ))}
-      {series.map((s) => (
-        <g key={s.key}>
-          <polyline points={s.points.map((p) => `${x(stamp(p.period))},${y(p.value)}`).join(' ')}
-                    stroke={s.color} />
-          {s.points.length > 0 && (
-            <circle cx={x(stamp(s.points[s.points.length - 1].period))}
-                    cy={y(s.points[s.points.length - 1].value)} r={3} fill={s.color}>
-              <title>{`${s.label}: ${fmt1(s.points[s.points.length - 1].value)}%`}</title>
-            </circle>
-          )}
-        </g>
-      ))}
-    </svg>
+    <div className="ec-chartwrap">
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="ec-chart"
+           onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        {[yHi - (yHi - yLo) * 0.1, (yLo + yHi) / 2, lo].map((v, i) => (
+          <g key={i}>
+            <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} className="ec-guide" />
+            <text x={PAD.left - 6} y={y(v) + 3} textAnchor="end" className="ec-label">{fmt1(v)}</text>
+          </g>
+        ))}
+        {years.map((m) => (
+          <g key={m}>
+            <line x1={x(stamp(m))} x2={x(stamp(m))} y1={PAD.top} y2={H - PAD.bottom} className="ec-guide" />
+            <text x={x(stamp(m))} y={H - 6} textAnchor="middle" className="ec-label">{m.slice(0, 4)}</text>
+          </g>
+        ))}
+        {series.map((s) => (
+          <g key={s.key}>
+            <polyline points={s.points.map((p) => `${x(stamp(p.period))},${y(p.value)}`).join(' ')}
+                      stroke={s.color} />
+            {s.points.length > 0 && (
+              <circle cx={x(stamp(s.points[s.points.length - 1].period))}
+                      cy={y(s.points[s.points.length - 1].value)} r={3} fill={s.color} />
+            )}
+          </g>
+        ))}
+        {/* точки всех серий в выбранном месяце — чтобы было видно, что сравниваем */}
+        {tip && tip.rows.map((r) => {
+          const s = series.find((q) => q.key === r.key)
+          const p = s && s.points.find((q) => q.period === tip.month)
+          return p ? <circle key={r.key} cx={x(stamp(p.period))} cy={y(p.value)} r={3.5}
+                             fill={r.color} className="ec-hover-dot" /> : null
+        })}
+        {tip && <line className="chart-cross" x1={tip.lineX} x2={tip.lineX}
+                     y1={PAD.top} y2={H - PAD.bottom} />}
+      </svg>
+      {tip && (
+        <div className="chart-tip" style={{
+          left: tip.cx, top: tip.cy,
+          transform: tip.flip ? 'translateX(-100%)' : undefined,
+        }}>
+          <b className="tip-day">{monthLabel(tip.month)}</b>
+          {tip.rows.map((r) => (
+            <div key={r.key} className="tip-row">
+              <i style={{ background: r.color }} />
+              <span>{r.label}</span>
+              <b>
+                {fmt2(r.value)}%
+                {r.yoy != null && (
+                  <em className={r.yoy >= 0 ? 'ec-up' : 'ec-down'}
+                      title={`год назад: ${fmt2(r.value - r.yoy)}%`}>
+                    {' '}{r.yoy >= 0 ? '▲' : '▼'} {fmt2(Math.abs(r.yoy))} п.п.
+                  </em>
+                )}
+              </b>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -222,14 +303,22 @@ export default function Econ({ rangeFrom = '2024-01' }) {
           </button>
         ))}
       </div>
-      {rateSeries.length > 0 && <LineChart series={rateSeries} />}
+      {rateSeries.length > 0 && (
+        <>
+          <LineChart series={rateSeries} />
+          <p className="ec-mini-hint">
+            Наведи курсор на график — покажем ставку каждого включённого ряда
+            за ближайший месяц и изменение к тому же месяцу год назад.
+          </p>
+        </>
+      )}
       <p className="ec-mini-note">
         {lastOf('rate_corp_long') && (
-          <>Кредит бизнесу на год+: <b>{fmt1(lastOf('rate_corp_long').value)}%</b>{' · '}</>
+          <>Кредит бизнесу на год+: <b>{fmt2(lastOf('rate_corp_long').value)}%</b>{' · '}</>
         )}
-        {lastOf('rate_retail_all') && (<>кредит людям: <b>{fmt1(lastOf('rate_retail_all').value)}%</b>{' · '}</>)}
-        {lastOf('rate_dep_fin_short') && (<>вклад людям: <b>{fmt1(lastOf('rate_dep_fin_short').value)}%</b>{' · '}</>)}
-        {keyRate.length > 0 && (<>ключевая: <b>{fmt1(keyRate[keyRate.length - 1].rate)}%</b></>)}
+        {lastOf('rate_retail_all') && (<>кредит людям: <b>{fmt2(lastOf('rate_retail_all').value)}%</b>{' · '}</>)}
+        {lastOf('rate_dep_fin_short') && (<>вклад людям: <b>{fmt2(lastOf('rate_dep_fin_short').value)}%</b>{' · '}</>)}
+        {keyRate.length > 0 && (<>ключевая: <b>{fmt2(keyRate[keyRate.length - 1].rate)}%</b></>)}
       </p>
 
       {/* ——— 3. ОФЗ ——— */}
@@ -307,7 +396,7 @@ export default function Econ({ rangeFrom = '2024-01' }) {
                   </b>
                 )}
               </span>
-              <Spark points={series[t.key].slice(-36)} />
+              <Spark points={series[t.key].slice(-36)} caption={t.label} />
               <em className="ec-tile-note">{p.period} · {t.note}</em>
             </div>
           )
