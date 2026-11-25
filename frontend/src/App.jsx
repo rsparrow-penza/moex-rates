@@ -71,12 +71,14 @@ const EXCHANGE_CODES = ['USD', 'EUR', 'CNY']
 // Темы страницы — четыре вкладки. Разделяем по источнику и по вопросу, на
 // который блок отвечает: цены инструментов (ММВБ/Yahoo), решения регулятора
 // и банковская отчётность (ЦБ), макро ряды (ЦБ/Росстат), долг (ММВБ).
+// Иконка отдельно от подписи: эмодзи в потоке текста масштабируется вместе
+// с 0.84 rem подписи и теряется, поэтому у неё свой класс и свой кегль
 const TABS = [
-  { id: 'fx', label: '💱 Курсы валют' },
-  { id: 'cbr', label: '🏦 ЦБ: ставка, прогноз, банки' },
-  { id: 'econ', label: '📈 Экономика' },
-  { id: 'metals', label: '🪙 Металлы' },
-  { id: 'ofz', label: '🧱 ОФЗ' },
+  { id: 'fx', icon: '💱', label: 'Курсы валют' },
+  { id: 'cbr', icon: '🏦', label: 'ЦБ: ставка, прогноз, банки' },
+  { id: 'econ', icon: '📈', label: 'Экономика' },
+  { id: 'metals', icon: '🪙', label: 'Металлы' },
+  { id: 'ofz', icon: '🧱', label: 'ОФЗ' },
 ]
 
 function TabBar({ tab }) {
@@ -84,7 +86,8 @@ function TabBar({ tab }) {
     <nav className="tabs" aria-label="Разделы страницы">
       {TABS.map((t) => (
         <a key={t.id} href={`#/${t.id}`} className={t.id === tab ? 'tab tab-on' : 'tab'}
-           aria-current={t.id === tab ? 'page' : undefined}>{t.label}</a>
+           aria-current={t.id === tab ? 'page' : undefined}>
+          <span className="tab-ico" aria-hidden="true">{t.icon}</span>{t.label}</a>
       ))}
     </nav>
   )

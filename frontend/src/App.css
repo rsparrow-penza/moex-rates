@@ -56,6 +56,15 @@
   white-space: nowrap;
 }
 .tab:hover { color: #f2f2f7; border-color: #4a4a66; }
+
+/* эмодзи-иконка вкладки: крупнее подписи и чуть приподнята — на 0.84 rem
+   она читалась как мусор перед словом */
+.tab-ico {
+  font-size: 1.35em;
+  line-height: 1;
+  margin-right: 6px;
+  vertical-align: -0.14em;
+}
 .tab-on {
   color: #f2f2f7;
   background: #2b2b3d;
