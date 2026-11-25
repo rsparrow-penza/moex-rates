@@ -206,7 +206,17 @@ class TestRosstatParsers(unittest.TestCase):
 class TestMetals(unittest.TestCase):
     """ФОРТС: выбор ближайшего живого контракта и цены металлов."""
 
+    METALS_REAL = None
     COLS = ["SECID", "SHORTNAME", "LASTTRADEDATE"]
+
+    def setUp(self):
+        # часть тестов подменяет реестр металлов — возвращаем как было,
+        # иначе порядок букв в именах методов решает, что увидит соседний тест
+        TestMetals.METALS_REAL = list(econ.METALS)
+
+    def tearDown(self):
+        if TestMetals.METALS_REAL:
+            econ.METALS = list(TestMetals.METALS_REAL)
     ROWS = [
         ["GDZ6", "GOLD-12.26", "2026-12-18"],      # ближайший живой
         ["GDH7", "GOLD-3.27", "2027-03-19"],       # дальше по сроку
@@ -247,7 +257,6 @@ class TestMetals(unittest.TestCase):
         raise AssertionError("неожиданный url " + url)
 
     def test_fetch_metals_writes_both_rows(self):
-        econ.METALS_BAK = econ.METALS
         econ.METALS = [dict(metal="AU", label="Золото", prefix="GOLD",
                             world="GC=F", world_label="COMEX")]
         try:
@@ -264,8 +273,36 @@ class TestMetals(unittest.TestCase):
             self.assertEqual(world["value"], 3558.5)        # живая котировка перекрывает закрытие
             self.assertEqual((ct["secid"], ct["shortname"]), ("GDZ6", "GOLD-12.26"))
         finally:
-            econ.METALS = econ.METALS_BAK
-            del econ.METALS_BAK
+            pass
+
+
+    LIVE_WITH_QUOTE = {
+        "securities": {"columns": ["SECID", "SHORTNAME", "LASTTRADEDATE"],
+                       "data": [["GDZ6", "GOLD-12.26", "2026-12-18"]]},
+        "marketdata": {"columns": ["SECID", "LAST", "CHANGEPRCNT"],
+                       "data": [["GDZ6", 3579.7, -0.25]]},
+    }
+
+    def test_live_forts_quote_fills_today(self):
+        """История ФОРТС публикуется на следующий день — сегодняшняя цена
+        берётся из marketdata.LAST, иначе блок жил бы «вчера».
+        """
+        econ.METALS = [dict(metal="AU", label="Золото", prefix="GOLD",
+                            world="GC=F", world_label="COMEX")]
+        answers = [self.LIVE_WITH_QUOTE, self.HIST, self.YAHOO]
+        with mock.patch.object(rates, "http_get_json", side_effect=lambda *a, **k: answers.pop(0)):
+            econ.fetch_metals(days=30)
+        with rates.get_db() as db:
+            today = db.execute(
+                "SELECT value FROM econ_series WHERE key = 'metal_AU_forts' ORDER BY period DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(today["value"], 3579.7)
+        answers2 = [self.LIVE, self.HIST, self.YAHOO]
+        with mock.patch.object(rates, "http_get_json", side_effect=lambda *a, **k: answers2.pop(0)):
+            econ.fetch_metals(days=30)     # без LAST в выдаче — не падаем
+        with rates.get_db() as db:
+            still = db.execute("SELECT COUNT(*) n FROM econ_series WHERE key = 'metal_AU_forts'").fetchone()
+        self.assertGreater(still["n"], 0)
 
 
 class TestMetalsEndpoint(unittest.TestCase):

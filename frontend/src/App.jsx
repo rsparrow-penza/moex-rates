@@ -72,6 +72,7 @@ function RatesApp() {
   const [from, setFrom] = useState(dateMinus(30))
   const [to, setTo] = useState(dateMinus(0))
   const [picked, setPicked] = useState(null)        // null = все валюты
+  const [rowsShown, setRowsShown] = useState(10)    // дневная таблица: 10 строк, дальше — по кнопке
   const [rates, setRates] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -115,6 +116,9 @@ function RatesApp() {
     const timer = setInterval(load, 5 * 60 * 1000)
     return () => clearInterval(timer)
   }, [load, picked])
+
+  // новый период или новый набор инструментов — снова показываем 10 свежих
+  useEffect(() => { setRowsShown(10) }, [from, to, picked])
 
   function toggleCurrency(code) {
     setPicked((prev) => {
@@ -275,7 +279,7 @@ function RatesApp() {
           </tr>
         </thead>
         <tbody>
-          {byDate.map(([day, byCur]) => (
+          {byDate.slice(0, rowsShown).map(([day, byCur]) => (
             <tr key={day} className={day.endsWith('-01') ? 'row-1st' : undefined}>
               <td>{day}</td>
               {tableCodes.map((c) => {
@@ -294,6 +298,19 @@ function RatesApp() {
           ))}
         </tbody>
       </table>
+
+      {/* Таблица дневных значений длинная (300+ строк за квартал) — показываем
+          первые 10, остальные раскрываются по кнопке порциями по 20 */}
+      {byDate.length > rowsShown && (
+        <button type="button" className="table-more" onClick={() => setRowsShown((n) => n + 20)}>
+          Показать ещё {Math.min(20, byDate.length - rowsShown)} из {byDate.length - rowsShown}
+        </button>
+      )}
+      {byDate.length > 10 && rowsShown >= byDate.length && (
+        <button type="button" className="table-more table-less" onClick={() => setRowsShown(10)}>
+          Свернуть до 10 строк
+        </button>
+      )}
 
       {/* Справочно: топ-10 банков — активы, капитал, прибыль (указатель ЦБ) */}
       <Econ />

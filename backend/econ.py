@@ -607,7 +607,12 @@ def fetch_metals(days: int = METALS_DAYS):
     today = date.today().isoformat()
     listing = _http_json(_moex(FORTS_LIST_URL), params={
         "iss.meta": "off", "limit": 0,
-        "securities.columns": "SECID,SHORTNAME,LASTTRADEDATE"})
+        "securities.columns": "SECID,SHORTNAME,LASTTRADEDATE",
+        # marketdata.LAST — сегодняшняя котировка: историю ФОРТС ISS выкладывает
+        # только на следующий день, без неё блок вёл бы себя «вчерашним»
+        "marketdata.columns": "SECID,LAST,SETTLEPRICE,CHANGEPRCNT"})
+    live_md = {r[0]: r for r in listing.get("marketdata", {}).get("data", [])}
+    live_cols = listing.get("marketdata", {}).get("columns", [])
     picked = pick_forts_contract(listing["securities"]["data"],
                                  listing["securities"]["columns"], today)
     since = (date.today() - timedelta(days=days)).isoformat()
@@ -645,6 +650,16 @@ def fetch_metals(days: int = METALS_DAYS):
                 if len(page) < 100:
                     break
                 start += len(page)
+            # сегодняшняя котировка ФОРТС (торги идут, история — с дневным
+            # лагом): LAST перекрывает строку сегодняшнего дня
+            lrow = live_md.get(secid)
+            if lrow and "LAST" in live_cols:
+                v = lrow[live_cols.index("LAST")]
+                if isinstance(v, (int, float)) and v > 0:
+                    db.execute(
+                        "INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
+                        (f"metal_{m['metal']}_forts", today, float(v)))
+                    n += 1
             # мир: тот же Yahoo-endpoint, что качает Brent/Gold
             y = _http_json(YAHOO_CHART_URL.format(ticker=m["world"]),
                            params={"interval": "1d", "range": f"{days}d"})

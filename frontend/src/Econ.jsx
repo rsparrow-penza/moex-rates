@@ -39,19 +39,33 @@ function yoy(points, months = 12) {
 }
 
 // Спарклайн: маленькая линия без осей, для плитки реального сектора
-function Spark({ points, width = 120, height = 30, caption = '' }) {
+function Spark({ points, width = 120, height = 42, caption = '' }) {
   if (!points || points.length < 2) return null
   const vals = points.map((p) => p.value)
   const lo = Math.min(...vals), hi = Math.max(...vals)
+  const line = height - 14                     // снизу оставляем место под даты
+  const x = (i) => (i / (points.length - 1)) * (width - 2) + 1
+  const y = (v) => 2 + (1 - (v - lo) / (hi - lo || 1)) * (line - 4)
   // подсказка наведения: чем дышал ряд на показанном окне
   const info = `${caption} · ${points[0].period}—${points[points.length - 1].period}: `
     + `мин ${fmt1(lo)}, макс ${fmt1(hi)}, сейчас ${fmt1(vals[vals.length - 1])}`
-  const x = (i) => (i / (points.length - 1)) * (width - 2) + 1
-  const y = (v) => height - 2 - ((v - lo) / (hi - lo || 1)) * (height - 4)
+  // шкала дат: начало, середина, конец окна (тесно — только два последних
+  // разрывают глаз, три уже читаются как ось)
+  const ticks = [0, Math.floor((points.length - 1) / 2), points.length - 1]
+  const mmyy = (per) => `${per.slice(5, 7)}.${per.slice(2, 4)}`
   return (
     <svg width={width} height={height} className="ec-spark">
       <title>{info}</title>
       <polyline points={points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} />
+      {ticks.map((i, k) => (
+        <g key={i}>
+          <line x1={x(i)} x2={x(i)} y1={line} y2={line + 3} className="ec-tick" />
+          <text x={k === 0 ? x(i) : k === 2 ? x(i) : x(i)} y={height - 2}
+                textAnchor={k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}
+                className="ec-tick-label">{mmyy(points[i].period)}</text>
+        </g>
+      ))}
+      <line x1={0} x2={width} y1={line} y2={line} className="ec-axis" />
     </svg>
   )
 }

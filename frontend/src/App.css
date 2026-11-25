@@ -911,6 +911,25 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .mt-gram { color: #8fd3c7; }
 .mt-empty { color: #55556a; }
 .mt-spark polyline { fill: none; stroke-width: 1.4; }
+.mt-spark .mt-axis { stroke: #33334a; stroke-width: 1; }
+.mt-spark .mt-axis-label { fill: #6b6b82; font-size: 7px; }
+
+/* кнопка раскрытия дневной таблицы */
+.table-more {
+  display: block;
+  width: 100%;
+  margin: 8px 0 16px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: #c7c7d8;
+  background: #1c1c28;
+  border: 1px solid #33334a;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.table-more:hover { color: #f2f2f7; border-color: #4a4a66; }
+.table-less { color: #77778b; }
 
 /* ---------- Экономика (ставки · ОФЗ · реальный сектор · бюджет) ---------- */
 
@@ -1032,6 +1051,9 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .ec-tile-note { font-style: normal; font-size: 0.7rem; color: #6b6b82; }
 
 .ec-spark polyline { fill: none; stroke: #4c6ef5; stroke-width: 1.4; }
+.ec-spark .ec-axis { stroke: #33334a; stroke-width: 1; }
+.ec-spark .ec-tick { stroke: #33334a; stroke-width: 1; }
+.ec-spark .ec-tick-label { fill: #6b6b82; font-size: 7px; }
 
 .ec-up { color: #69db7c; font-size: 0.78rem; }
 .ec-down { color: #ff6b6b; font-size: 0.78rem; }
