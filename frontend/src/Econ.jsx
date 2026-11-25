@@ -124,26 +124,43 @@ export default function Econ({ rangeFrom = '2024-01' }) {
 
   useEffect(() => {
     const j = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(`${u} → ${r.status}`); return r.json() })
+    const keys = [...RATE_CHIPS.map((c) => c.key), 'ippe_idx', 'unemp_rate', 'wage_nom',
+                  'rddi_yoy', 'retail_turnover']
+
+    const loadSeries = () => Promise.all(
+      keys.map((k) => j(`/api/econ/series?key=${k}&from=${rangeFrom}`).catch(() => [])))
+      .then((got) => {
+        const filled = Object.fromEntries(keys.map((k, i) => [k, got[i]]))
+        setSeries(filled)
+        return got.some((g) => g.length > 1)
+      })
+
+    let retry = null
     const load = async () => {
       try {
         const [m, b, bg, kr] = await Promise.all([
           j('/api/econ/meta'), j('/api/econ/bonds'), j('/api/budget'), j('/api/key-rate'),
         ])
         setMeta(m); setBonds(b); setBudget(bg); setKeyRate(kr)
-        const keys = [...RATE_CHIPS.map((c) => c.key), 'ippe_idx', 'unemp_rate', 'wage_nom',
-                      'rddi_yoy', 'retail_turnover']
-        const got = await Promise.all(keys.map((k) =>
-          j(`/api/econ/series?key=${k}&from=${rangeFrom}`).catch(() => [])))
-        setSeries(Object.fromEntries(keys.map((k, i) => [k, got[i]])))
+        const any = await loadSeries()
+        // попали на стартовый seed бэкенда (ряды ещё не наполнены) —
+        // одна повторная попытка через 20 секунд, без мученического ожидания
+        if (!any) retry = setTimeout(loadSeries, 20000)
       } catch (e) {
         setError(`Не удалось загрузить экономику: ${e.message}`)
       }
     }
     load()
-    // ОФЗ — биржа, снимок обновляется планировщиком раз в 12 часов;
-    // перезапрашиваем раз в полчаса, как остальные блоки
-    const id = setInterval(() => { j('/api/econ/bonds').then(setBonds).catch(() => {}) }, 30 * 60 * 1000)
-    return () => clearInterval(id)
+    // Обновление: ОФЗ — планировщик биржи раз в 12 часов, месячные ряды —
+    // ЦБ/Росстат в окна публикаций. Перезапрашиваем каждые полчаса; в том
+    // числе поэтому блок «догоняет» сам, если попал на стартовый seed
+    // бэкенда (пока тот качает History ОФЗ, рядов ещё нет).
+    const id = setInterval(() => {
+      j('/api/econ/bonds').then(setBonds).catch(() => {})
+      j('/api/budget').then(setBudget).catch(() => {})
+      loadSeries().catch(() => {})
+    }, 30 * 60 * 1000)
+    return () => { clearInterval(id); clearTimeout(retry) }
   }, [rangeFrom])
 
   const rateSeries = useMemo(
