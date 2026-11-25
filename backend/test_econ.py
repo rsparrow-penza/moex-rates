@@ -71,10 +71,20 @@ class TestCbrRatesParsers(unittest.TestCase):
 
 
 class TestOfz(unittest.TestCase):
-    DATA = {"securities": {"columns": ["SECID", "SHORTNAME"],
-                           "data": [[s, n] for s, n, _ in econ.OFZ_UNIVERSE]},
-            "marketdata": {"columns": ["SECID", "YIELD"],
-                           "data": [[s, 14.0 + i / 10] for i, (s, _n, _m) in enumerate(econ.OFZ_UNIVERSE)]}}
+    DATA = {"securities": {"columns": ["SECID", "MATDATE", "ACCRUEDINT"],
+                           "data": [[s, m, 25.2] for s, _n, m in econ.OFZ_UNIVERSE]},
+            "marketdata": {"columns": ["SECID", "YIELD", "LAST", "LASTTOPREVPRICE",
+                                       "VALTODAY_RUR", "DURATION"],
+                           "data": [[s, 14.0 + i / 10, 99.0 - i / 5, i % 3 - 1,
+                                     1_000_000 * (i + 1), 100 + i]
+                                    for i, (s, _n, _m) in enumerate(econ.OFZ_UNIVERSE)]}}
+    ISSUE = {"description": {"data": [
+        ["SECID", "", "SU26236RMFS8", "string"],
+        ["ISSUEDATE", "", "2020-11-11", "date"],
+        ["MATDATE", "", "2028-05-17", "date"],
+        ["FACEVALUE", "", "1000", "number"],
+        ["ISSUESIZE", "", "498600000", "number"],
+        ["COUPONPERCENT", "", "5.7", "number"]]}}
 
     FULL = {"history": {"columns": ["TRADEDATE", "SECID", "CLOSE", "YIELDCLOSE"],
                         "data": [[f"2026-09-{d:02d}", "SU26247RMFS5", 90.0, 15.5] for d in range(1, 101)]}}
@@ -85,9 +95,23 @@ class TestOfz(unittest.TestCase):
         with mock.patch.object(rates, "http_get_json", return_value=self.DATA):
             rows = econ.fetch_ofz_snapshot()
         self.assertEqual(len(rows), len(econ.OFZ_UNIVERSE))
+        # дата погашения берётся у биржи, а не из константы корзины
+        self.assertEqual(rows[0][3], econ.OFZ_UNIVERSE[0][2])
+        self.assertEqual(rows[0][5], 99.0)        # цена, % от номинала
         with rates.get_db() as db:
             got = db.execute("SELECT COUNT(*) n FROM ofz_snapshot").fetchone()["n"]
         self.assertEqual(got, len(econ.OFZ_UNIVERSE))
+
+    def test_issue_info(self):
+        with mock.patch.object(rates, "http_get_json", return_value=self.ISSUE):
+            n = econ.fetch_ofz_info()
+        self.assertEqual(n, len(econ.OFZ_UNIVERSE))
+        with rates.get_db() as db:
+            row = db.execute("SELECT issuedate, coupon_prc, issue_size_mlrd FROM ofz_info"
+                             " WHERE secid = 'SU26236RMFS8'").fetchone()
+        self.assertEqual(row[0], "2020-11-11")
+        self.assertEqual(row[1], 5.7)
+        self.assertAlmostEqual(row[2], 498.6)      # 498,6 млн шт × 1000 ₽
 
     def test_history_pages_until_short_page(self):
         calls = []

@@ -245,13 +245,27 @@ export default function Econ({ rangeFrom = '2024-01' }) {
           </h3>
           <table className="ec-table">
             <thead>
-              <tr><th>Выпуск</th><th>Погашение</th><th>Доходность</th></tr>
+              <tr><th>Выпуск</th><th>Дата выпуска</th><th>Погашение</th><th>Купон, %</th>
+                  <th>Цена, % ном.</th><th>Δ дня</th><th>Доходность</th></tr>
             </thead>
             <tbody>
               {curve.map((c) => (
-                <tr key={c.secid}>
+                <tr key={c.secid}
+                    title={`Номинал ${fmt1(c.face_rur ?? 1000)} ₽ · НКД ${
+                      c.accrued != null ? fmt2(c.accrued) : '—'
+                    } ₽ · объём выпуска ${
+                      c.issue_size_mlrd != null ? fmt1(c.issue_size_mlrd) : '—'
+                    } млрд ₽ · оборот сегодня ${
+                      c.valtoday_rur != null ? fmt1(c.valtoday_rur / 1e6) : '0'
+                    } млн ₽`}>
                   <td>{c.shortname}</td>
+                  <td className="ec-mat">{c.issuedate ?? '—'}</td>
                   <td className="ec-mat">{c.matdate}</td>
+                  <td className="ec-cpn">{c.coupon_prc != null ? `${fmt2(c.coupon_prc)}%` : '—'}</td>
+                  <td className="ec-price">{c.price_prc != null ? fmt2(c.price_prc) : '—'}</td>
+                  <td className={`ec-chg${(c.price_chg_prc ?? 0) > 0 ? ' up' : (c.price_chg_prc ?? 0) < 0 ? ' down' : ''}`}>
+                    {c.price_chg_prc != null ? `${c.price_chg_prc > 0 ? '+' : ''}${fmt2(c.price_chg_prc)}` : '—'}
+                  </td>
                   <td className="ec-yld">{fmt2(c.yield_prc)}%</td>
                 </tr>
               ))}
@@ -259,7 +273,9 @@ export default function Econ({ rangeFrom = '2024-01' }) {
           </table>
           <p className="hint">
             Доходность к погашению по закрытию ММВБ (борт «Т+: Гособлигации»),
-            снимок {bonds.snap_date}. Наклон кривой — сколько рынок просит
+            снимок {bonds.snap_date}. Цена — последняя сделка в процентах от
+            номинала (1000 ₽); в подсказке строки — НКД, объём выпуска и
+            оборот дня. Наклон кривой — сколько рынок просит
             сверх коротких ставок за длинные деньги: пологая или перевёрнутая
             кривая — ожидание быстрого смягчения ЦБ, крутая — что низких
             ставок в обозримом будущем не будет.

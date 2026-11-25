@@ -832,11 +832,8 @@ if _is_main_process and not os.environ.get("SKIP_SEED"):
             for currency in empty:
                 backfill(currency)
         hourly_job()     # он же подтянет и ключевую ставку
-        # макроряды «Экономики»: разово, если база рядов пуста
-        with get_db() as db:
-            has_econ = db.execute("SELECT 1 FROM econ_series LIMIT 1").fetchone()
-        if not has_econ:
-            econ.econ_seed()
+        # макроряды «Экономики»: econ_seed сам смотрит, чего в базе нет
+        econ.econ_seed()
     seed_on_startup()
 
 
@@ -1083,9 +1080,14 @@ def econ_bonds():
     with get_db() as db:
         snap_date = db.execute(
             "SELECT MAX(snap_date) AS d FROM ofz_snapshot").fetchone()["d"]
+        # к снимку присоединяем справочник выпуска: дата эмиссии, купон,
+        # номинал, объём — они меняются редко, но фронту нужны в той же строке
         curve = db.execute(
-            "SELECT secid, shortname, matdate, yield_prc FROM ofz_snapshot"
-            " WHERE snap_date = ? ORDER BY matdate", (snap_date,)).fetchall() if snap_date else []
+            "SELECT s.secid, s.shortname, s.matdate, s.yield_prc, s.price_prc,"
+            " s.price_chg_prc, s.accrued, s.valtoday_rur,"
+            " i.issuedate, i.coupon_prc, i.face_rur, i.issue_size_mlrd"
+            " FROM ofz_snapshot s LEFT JOIN ofz_info i USING (secid)"
+            " WHERE s.snap_date = ? ORDER BY s.matdate", (snap_date,)).fetchall() if snap_date else []
         series = {}
         for secid, _sn, _md in econ.OFZ_UNIVERSE:
             rows = db.execute(

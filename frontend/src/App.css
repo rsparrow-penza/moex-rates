@@ -931,6 +931,11 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 }
 .ec-table td.ec-mat { color: #77778b; }
 .ec-table td.ec-yld { text-align: right; font-weight: 600; }
+.ec-table td.ec-cpn { color: #9a9ab0; }
+.ec-table td.ec-price { font-variant-numeric: tabular-nums; }
+.ec-table td.ec-chg { color: #77778b; }
+.ec-table td.ec-chg.up { color: #69db7c; }
+.ec-table td.ec-chg.down { color: #ff6b6b; }
 
 /* плитка реального сектора */
 .ec-tiles {

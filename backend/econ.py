@@ -137,7 +137,7 @@ ECON_SERIES = {
 # Корзина ОФЗ: ликвидные фиксированные купоны от 1.5 до ~15 лет (данные на
 # 25.11.2026, обороты дня с ТQOB). YIELD берём из marketdata ММВБ.
 OFZ_UNIVERSE = [
-    ("SU26207RMFS9", "ОФЗ 26207", "2027-05-17"),
+    ("SU26207RMFS9", "ОФЗ 26207", "2027-02-03"),
     ("SU26236RMFS8", "ОФЗ 26236", "2028-05-17"),
     ("SU26242RMFS6", "ОФЗ 26242", "2029-08-29"),
     ("SU26228RMFS5", "ОФЗ 26228", "2030-04-10"),
@@ -147,7 +147,7 @@ OFZ_UNIVERSE = [
     ("SU26245RMFS9", "ОФЗ 26245", "2035-09-26"),
     ("SU26243RMFS4", "ОФЗ 26243", "2038-05-19"),
     ("SU26247RMFS5", "ОФЗ 26247", "2039-05-11"),
-    ("SU26253RMFS3", "ОФЗ 26253", "2040-10-03"),
+    ("SU26253RMFS3", "ОФЗ 26253", "2038-10-06"),
     ("SU26238RMFS4", "ОФЗ 26238", "2041-05-15"),
 ]
 
@@ -424,6 +424,9 @@ def parse_rddi(content: bytes):
 # ---------------------------------------------------------------------------
 
 BOARDS_URL = "http://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQOB/securities.json"
+# Справочник выпуска (дата эмиссии, купон, номинал, объём) — по одному
+# запросу на бумагу; значения не меняются, поэтому ходим редко.
+ISSUE_URL = "http://iss.moex.com/iss/securities/{secid}/issue.json"
 HISTORY_URL = ("http://iss.moex.com/iss/history/engines/stock/markets/bonds/boards/TQOB/"
                "securities/{secid}.json")
 
@@ -469,29 +472,80 @@ def fetch_ofz_history(days: int = 400):
 
 
 def fetch_ofz_snapshot():
-    """Дневной срез кривой из live-борда TQOB: YIELD из marketdata."""
+    """
+    Дневной срез кривой из live-борда TQOB: доходность, цена (LAST, % от
+    номинала), изменение к предыдущему дню, НКД и дневной оборот.
+    """
     if _http_json is None:
         return None
-    data = _http_json(_moex(BOARDS_URL), params={"iss.meta": "off"})
+    data = _http_json(_moex(BOARDS_URL), params={
+        "iss.meta": "off", "iss.only": "securities,marketdata",
+        "securities.columns": "SECID,MATDATE,ACCRUEDINT",
+        "marketdata.columns": "SECID,YIELD,LAST,LASTTOPREVPRICE,VALTODAY_RUR,DURATION"})
     sec_cols = data["securities"]["columns"]
     md_cols = data["marketdata"]["columns"]
-    by_secid = {row[sec_cols.index("SECID")]: row for row in data["securities"]["data"]}
+    acc = {row[sec_cols.index("SECID")]: row for row in data["securities"]["data"]}
     md = {row[md_cols.index("SECID")]: row for row in data["marketdata"]["data"]}
+
+    def num(row, cols, name):
+        v = row[cols.index(name)]
+        return float(v) if isinstance(v, (int, float)) else None
+
     today = datetime.now().strftime("%Y-%m-%d")
     rows = []
     for secid, shortname, matdate in OFZ_UNIVERSE:
-        mdr = md.get(secid)
-        if not mdr:
+        if secid not in md:
             continue
-        yv = mdr[md_cols.index("YIELD")]
-        rows.append((today, secid, shortname, matdate,
-                     float(yv) if isinstance(yv, (int, float)) else None))
+        mdr = md[secid]
+        secr = acc.get(secid)
+        # дату погашения доверяем бирже (в константе корзины она могла устареть);
+        # OFZ_UNIVERSE задаёт только состав и порядок
+        live_mat = (secr[sec_cols.index("MATDATE")] if secr and "MATDATE" in sec_cols else None)
+        rows.append((today, secid, shortname, live_mat or matdate,
+                     num(mdr, md_cols, "YIELD"),
+                     num(mdr, md_cols, "LAST"),
+                     num(mdr, md_cols, "LASTTOPREVPRICE"),
+                     num(secr, sec_cols, "ACCRUEDINT") if secr else None,
+                     num(mdr, md_cols, "VALTODAY_RUR")))
     with _conn() as db:
         db.executemany(
-            "INSERT OR REPLACE INTO ofz_snapshot (snap_date, secid, shortname, matdate, yield_prc)"
-            " VALUES (?,?,?,?,?)", rows)
+            "INSERT OR REPLACE INTO ofz_snapshot (snap_date, secid, shortname, matdate,"
+            " yield_prc, price_prc, price_chg_prc, accrued, valtoday_rur)"
+            " VALUES (?,?,?,?,?,?,?,?,?)", rows)
     print(f"[econ/ofz] снимок {today}: {len(rows)} выпусков")
     return rows
+
+
+def fetch_ofz_info():
+    """
+    Справочник по выпуску: дата эмиссии (ISSUEDATE — начало размещения),
+    купон % , номинал и объём. Берётся из /iss/securities/<ISIN>/issue.json;
+    значения не меняются, поэтому достаточно одного захода при сиде и
+    редкой проверки (раз в месяц).
+    """
+    if _http_json is None:
+        return 0
+    rows = []
+    for secid, shortname, matdate in OFZ_UNIVERSE:
+        data = _http_json(_moex(ISSUE_URL.format(secid=secid)),
+                          params={"iss.meta": "off", "iss.only": "description"})
+        pairs = {r[0]: r[2] for r in data["description"]["data"]}
+        try:
+            face = float(pairs.get("FACEVALUE") or 0)
+            size = float(pairs.get("ISSUESIZE") or 0)
+        except (TypeError, ValueError):
+            face = size = 0.0
+        rows.append((secid, shortname, matdate,
+                     pairs.get("ISSUEDATE") or pairs.get("STARTDATEMOEX"),
+                     float(pairs["COUPONPERCENT"]) if pairs.get("COUPONPERCENT") else None,
+                     face or 1000.0,
+                     round(size * (face or 1000.0) / 1e9, 1) if size else None))
+    with _conn() as db:
+        db.executemany(
+            "INSERT OR REPLACE INTO ofz_info (secid, shortname, matdate, issuedate,"
+            " coupon_prc, face_rur, issue_size_mlrd) VALUES (?,?,?,?,?,?,?)", rows)
+    print(f"[econ/ofz] справочник выпусков: {len(rows)}")
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -525,9 +579,34 @@ def init_econ_db():
                 shortname TEXT NOT NULL,
                 matdate   TEXT NOT NULL,
                 yield_prc REAL,
+                price_prc REAL,        -- LAST: цена в % от номинала
+                price_chg_prc REAL,    -- изменение цены к предыдущему дню, %
+                accrued   REAL,        -- НКД, ₽ на облигацию
+                valtoday_rur REAL,     -- оборот дня, ₽
                 PRIMARY KEY (snap_date, secid)
             )
             """)
+        # старая схема снимка (без цены) — добавляем колонки
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(ofz_snapshot)")]
+        for col in ("price_prc", "price_chg_prc", "accrued", "valtoday_rur"):
+            if col not in cols:
+                db.execute(f"ALTER TABLE ofz_snapshot ADD COLUMN {col} REAL")
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ofz_info (
+                secid       TEXT PRIMARY KEY,
+                shortname   TEXT NOT NULL,
+                matdate     TEXT NOT NULL,
+                issuedate   TEXT,       -- дата начала размещения выпуска
+                coupon_prc  REAL,       -- купон, % годовых
+                face_rur    REAL,       -- номинал, ₽
+                issue_size_mlrd REAL    -- объём выпуска, млрд ₽ (size × номинал)
+            )
+            """)
+        # была опечатка в имени колонки — переименовываем, если узнали старую
+        icols = [r["name"] for r in db.execute("PRAGMA table_info(ofz_info)")]
+        if "issue_size_blrd" in icols and "issue_size_mlrd" not in icols:
+            db.execute("ALTER TABLE ofz_info RENAME COLUMN issue_size_blrd TO issue_size_mlrd")
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS budget_rows (
@@ -570,6 +649,10 @@ def register_jobs(scheduler):
         try:
             fetch_ofz_snapshot()
             fetch_ofz_history(days=5)
+            # дата выпуска и купон не меняются — обновляем раз в месяц для
+            # случая, когда в корзину добавим новый выпуск
+            if date.today().day <= 5:
+                fetch_ofz_info()
         except Exception as e:
             print(f"[econ/ofz] сбой: {e}")
 
@@ -579,19 +662,42 @@ def register_jobs(scheduler):
 
 
 def econ_seed():
-    """Стартовый прогон (раз в жизнь базы): history за 400 дней + месячные
-    ряды, чтобы фронту было что рисовать сразу после деплоя."""
+    """
+    Стартовый прогон: каждый блок докачиваем только если его в базе ещё нет
+    (или нет целиком) — тогда повторный запуск сервиса не превращается в
+    повторный опрос биржи, а пропущенный ранее справочник подтянется сам.
+    """
     init_econ_db()
+    with _conn() as db:
+        def has(sql):
+            return db.execute(sql).fetchone()[0]
+
+        need_bonds = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'bond_yld_%'")
+        need_info = not has("SELECT COUNT(*) FROM ofz_info")
+        need_rates = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'rate_%'")
+        need_real = not has("SELECT COUNT(*) FROM econ_series WHERE key IN ('ippe_idx','unemp_rate')")
+
+    if need_bonds:
+        try:
+            fetch_ofz_history(days=400)
+        except Exception as e:
+            print(f"[econ/seed] ofz history: {e}")
     try:
-        fetch_ofz_history(days=400)
         fetch_ofz_snapshot()
     except Exception as e:
-        print(f"[econ/seed] ofz: {e}")
-    try:
-        fetch_cbr_rates()
-    except Exception as e:
-        print(f"[econ/seed] rates: {e}")
-    try:
-        fetch_rosstat_real()
-    except Exception as e:
-        print(f"[econ/seed] real: {e}")
+        print(f"[econ/seed] ofz snapshot: {e}")
+    if need_info:
+        try:
+            fetch_ofz_info()
+        except Exception as e:
+            print(f"[econ/seed] ofz info: {e}")
+    if need_rates:
+        try:
+            fetch_cbr_rates()
+        except Exception as e:
+            print(f"[econ/seed] rates: {e}")
+    if need_real:
+        try:
+            fetch_rosstat_real()
+        except Exception as e:
+            print(f"[econ/seed] real: {e}")
