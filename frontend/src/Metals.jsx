@@ -1,9 +1,13 @@
-// Metals.jsx — блок «Металлы на бирже»: ближайшие контракты ФОРТС и мир.
+// Metals.jsx — вкладка «Металлы на бирже»: ближайшие контракты ФОРТС и мир.
 //
-// Данные: GET /api/metals — дневные цены в $ за тройскую унцию с двух
-// площадок: ММВБ ФОРТС (GOLD/SILV/PLT/PLD, ряд закрывается по московскому
-// дню) и COMEX/NYMEX через Yahoo. Разница между ними — базис: сколько
-// российский контракт стоит относительно мирового.
+// Данные: GET /api/metals — дневные цены с двух площадок: ММВБ ФОРТС
+// (GOLD/SILV/PLT/PLD в $ за тройскую унцию, COPPER/ALUM в $ за тонну) и
+// мир (COMEX/NYMEX/LME через Yahoo). Бэкенд приводит мировую котировку к
+// нашей единице (медь на COMEX — в $ за фунт), поэтому базис считается
+// честно: сколько российский контракт стоит относительно мирового.
+//
+// Никель и цинк на ФОРТС есть, но не добавлены: 37–67 сделок в день —
+// базис по ним был бы шумом, а не сигналом.
 //
 // Контракт квартальный: когда ближайший истекает, бэкенд сам подбирает
 // следующий (metal_contract), и ряд продолжается новым контрактом — в месте
@@ -16,13 +20,15 @@ const fmt1 = (n) => n == null ? '—' : (Math.abs(n) >= 100
   ? Math.round(n).toLocaleString('ru-RU')
   : n.toFixed(2).replace('.', ','))
 
-// Тройская унция — 31,1034768 г; перевод $/унция → ₽/грамм идёт по курсу ЦБ
+// Тройская унция — 31,1034768 г; цветные котируются тоннами. Перевод
+// $/единица → ₽ за единицу (грамм для драгметаллов, тонна для цветных)
+// идёт по курсу ЦБ на доллар
 const OZ_IN_G = 31.1034768
 
 const COLORS = { AU: '#fab005', AG: '#ced4da', PT: '#74c0fc', PD: '#f783ac' }
 
 // Спарклайн: линия цены за окно + последняя точка
-function Spark({ points, color = '#fab005', width = 132, height = 42 }) {
+function Spark({ points, color = '#fab005', width = 132, height = 42, unit = 'унция' }) {
   if (!points || points.length < 2) return <span className="mt-empty">—</span>
   const vals = points.map((p) => p.value)
   const lo = Math.min(...vals), hi = Math.max(...vals)
@@ -34,7 +40,7 @@ function Spark({ points, color = '#fab005', width = 132, height = 42 }) {
   const mmyy = (d) => `${d.slice(5, 7)}.${d.slice(2, 4)}`
   return (
     <svg width={width} height={height} className="mt-spark">
-      <title>{`${points[0].date}—${last.date}: мин ${fmt1(lo)}, макс ${fmt1(hi)}, сейчас ${fmt1(last.value)} $/унция`}</title>
+      <title>{`${points[0].date}—${last.date}: мин ${fmt1(lo)}, макс ${fmt1(hi)}, сейчас ${fmt1(last.value)} $/${unit}`}</title>
       <polyline points={points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} stroke={color} />
       <circle cx={x(points.length - 1)} cy={y(last.value)} r={2.5} fill={color} />
       <line x1={0} x2={width} y1={line} y2={line} className="mt-axis" />
@@ -92,7 +98,7 @@ export default function Metals() {
         worldPrice: world?.world,
         worldDayPct: world && worldPrev ? (world.world / worldPrev.world - 1) * 100 : null,
         basis: last && world ? (last.forts / world.world - 1) * 100 : null,
-        gramRub: last && usd ? (last.forts * usd) / OZ_IN_G : null,
+        perUnit: last && usd ? (last.forts * usd) / (m.unit === 'унция' ? OZ_IN_G : 1) : null,
         spark: withF.slice(-90).map((p) => ({ date: p.date, value: p.forts })),
       }
     }).filter((r) => r.price != null)
@@ -106,24 +112,24 @@ export default function Metals() {
     <section className="metals" aria-label="Биржевые цены на металлы">
       <h2>🪙 Металлы на бирже</h2>
       <p className="cf-sub">
-        ФОРТС (MOEX) · $ за тройскую унцию · ближайшие контракты
-        {usd ? ` · ₽/грамм по курсу ЦБ ${fmt2(usd)} ₽/$` : ''}
+        ФОРТС (MOEX) · драгметаллы в $ за тройскую унцию, медь и алюминий — в $ за тонну
+        · ближайшие контракты{usd ? ` · ₽ по курсу ЦБ ${fmt2(usd)} ₽/$` : ''}
       </p>
 
       <table className="mt-table">
         <thead>
           <tr>
-            <th>Металл</th><th>Контракт ФОРТС</th><th>Цена, $/унц</th><th>За день</th>
-            <th>Мир, $/унц</th><th>Базис</th><th>₽/грамм</th><th>90 дней (даты: мм.гг)</th>
+            <th>Металл</th><th>Контракт ФОРТС</th><th>Цена, $</th><th>За день</th>
+            <th>Мир, $</th><th>Базис</th><th>₽</th><th>90 дней (даты: мм.гг)</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.metal}>
-              <td className="mt-name">
+              <td className="mt-name" title={`мир: ${r.world} (${r.world_label})`}>
                 <i className="mt-dot" style={{ background: COLORS[r.metal] }} />
                 {r.label}
-                <em>{r.world_label}</em>
+                <em>{r.unit === 'унция' ? 'унция' : 'тонна'} · {r.world_label}</em>
               </td>
               <td className="mt-ct" title={`последняя торговля ${r.contract?.lasttrade ?? ''}`}>
                 {r.contract?.shortname ?? '—'}
@@ -133,27 +139,32 @@ export default function Metals() {
                 {r.dayPct == null ? '—' : `${r.dayPct > 0 ? '+' : ''}${fmt2(r.dayPct)}%`}
               </td>
               <td className="mt-world"
-                  title={`мир: ${r.world} · ${r.worldDayPct == null ? 'Δ дня нет' : `Δ ${fmt2(r.worldDayPct)}%`}`}>
+                  title={`${r.world_label} · ${r.world}${r.worldDayPct == null ? '' : ` · Δ дня ${fmt2(r.worldDayPct)}%`}${r.unit === 'тонна' && r.world === 'HG=F' ? ' (котируется в $/фунт, пересчитано в $/тонну)' : ''}`}>
                 {fmt1(r.worldPrice)}
               </td>
               <td className={`mt-basis${r.basis > 0 ? ' up' : r.basis < 0 ? ' down' : ''}`}
                   title="цена ФОРТС относительно мировой: плюс — российский контракт дороже">
                 {r.basis == null ? '—' : `${r.basis > 0 ? '+' : ''}${fmt2(r.basis)}`}
               </td>
-              <td className="mt-gram">{r.gramRub == null ? '—' : fmt1(r.gramRub)}</td>
-              <td><Spark points={r.spark} color={COLORS[r.metal]} /></td>
+              <td className="mt-gram" title={r.unit === 'унция' ? '₽ за 1 грамм' : '₽ за 1 тонну'}>
+                {r.perUnit == null ? '—' : fmt1(r.perUnit)}
+              </td>
+              <td><Spark points={r.spark} color={COLORS[r.metal]} unit={r.unit === 'унция' ? 'унция' : 'тонну'} /></td>
             </tr>
           ))}
         </tbody>
       </table>
 
       <p className="hint">
-        Цены фьючерсов в $ за тройскую унцию (31,103 г); ₽/грамм — по курсу ЦБ
-        на доллар. ММВБ не отдаёт через публичный API спот-котировки ГЦМ
-        (слитки), поэтому берутся фьючерсы ФОРТС: контракт живой, но квартальный —
-        при переклейке ряда возможен скачок на величину контанго. Мировая цена —
-        COMEX (золото, серебро) и NYMEX (платина, палладий); базис близок к нулю —
-        значит российский рынок в теме, сильный плюс — локальный дефицит металла.
+        Драгметаллы — $ за тройскую унцию (31,103 г), медь и алюминий — $ за
+        тонну. В колонке ₽: грамм для драгметаллов, тонна для цветных — всё по
+        курсу ЦБ на доллар. Мировая цена меди котируется в $ за фунт (COMEX) и
+        пересчитана в $ за тонну на входе, чтобы базис был сравним.
+        ММВБ не отдаёт через публичный API спот-котировки ГЦМ (слитки), поэтому
+        берутся фьючерсы ФОРТС: контракт живой, но квартальный — при переклейке
+        ряда возможен скачок на величину контанго. Базис близок к нулю —
+        российский рынок в теме мира; устойчивый плюс — локальный дефицит
+        металла или разрыв в логистике.
       </p>
     </section>
   )

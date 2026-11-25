@@ -228,6 +228,18 @@ class TestMetals(unittest.TestCase):
         ["MXL6", "MOEX-12.26", "2026-12-18"],      # не металл
     ]
 
+    def test_registry_shape(self):
+        """Реестр целый: у каждого металла есть единица и коэффициент мира —
+        без них базис по меди считается в фунтах вместо тонн."""
+        for m in econ.METALS:
+            self.assertIn(m["unit"], ("унция", "тонна"))
+            self.assertIsInstance(m["world_factor"], float)
+        cu = next(m for m in econ.METALS if m["metal"] == "CU")
+        self.assertAlmostEqual(cu["world_factor"], econ.LB_PER_TONNE, places=3)
+        au = next(m for m in econ.METALS if m["metal"] == "AU")
+        self.assertEqual(au["world_factor"], 1.0)
+        self.assertEqual({m["metal"] for m in econ.METALS}, {"AU", "AG", "PT", "PD", "CU", "AL"})
+
     def test_picks_nearest_alive_contract_per_metal(self):
         picked = econ.pick_forts_contract(self.ROWS, self.COLS, today="2026-11-25")
         self.assertEqual(picked["GOLD"], ("GDZ6", "GOLD-12.26", "2026-12-18"))
@@ -257,8 +269,7 @@ class TestMetals(unittest.TestCase):
         raise AssertionError("неожиданный url " + url)
 
     def test_fetch_metals_writes_both_rows(self):
-        econ.METALS = [dict(metal="AU", label="Золото", prefix="GOLD",
-                            world="GC=F", world_label="COMEX")]
+        econ.METALS = [m for m in TestMetals.METALS_REAL if m["metal"] == "AU"]
         try:
             with mock.patch.object(rates, "http_get_json", side_effect=self._answer):
                 n = econ.fetch_metals(days=30)
@@ -287,8 +298,7 @@ class TestMetals(unittest.TestCase):
         """История ФОРТС публикуется на следующий день — сегодняшняя цена
         берётся из marketdata.LAST, иначе блок жил бы «вчера».
         """
-        econ.METALS = [dict(metal="AU", label="Золото", prefix="GOLD",
-                            world="GC=F", world_label="COMEX")]
+        econ.METALS = [m for m in TestMetals.METALS_REAL if m["metal"] == "AU"]
         answers = [self.LIVE_WITH_QUOTE, self.HIST, self.YAHOO]
         with mock.patch.object(rates, "http_get_json", side_effect=lambda *a, **k: answers.pop(0)):
             econ.fetch_metals(days=30)

@@ -562,11 +562,26 @@ def fetch_ofz_info():
 # Валютный спот-рынок ММВБ (ГЦМ) через ISS снаружи не отдаёт котировки —
 # поэтому ФОРТС, а не «спот на слитки».
 
+# unit — в чём котирует ФОРТС (унция для драгметаллов, тонна для цветных);
+# world_factor — во что превратить котировку мирового источника, чтобы она
+# стала сравнима с нашей: у меди COMEX цена в $ за фунт, а на ФОРТС в $ за
+# тонну, поэтому ряд пересчитываем СРАЗУ, на входе, и в базе всё лежит
+# в одних единицах (иначе график и базис врют бы на orders of magnitude).
+LB_PER_TONNE = 2204.62262
+
 METALS = [
-    dict(metal="AU", label="Золото", prefix="GOLD",   world="GC=F", world_label="COMEX"),
-    dict(metal="AG", label="Серебро", prefix="SILV",  world="SI=F", world_label="COMEX"),
-    dict(metal="PT", label="Платина", prefix="PLT",   world="PL=F", world_label="NYMEX"),
-    dict(metal="PD", label="Палладий", prefix="PLD",  world="PA=F", world_label="NYMEX"),
+    dict(metal="AU", label="Золото",   prefix="GOLD",   world="GC=F",  world_label="COMEX",
+         unit="унция", world_factor=1.0),
+    dict(metal="AG", label="Серебро",  prefix="SILV",   world="SI=F",  world_label="COMEX",
+         unit="унция", world_factor=1.0),
+    dict(metal="PT", label="Платина",  prefix="PLT",    world="PL=F",  world_label="NYMEX",
+         unit="унция", world_factor=1.0),
+    dict(metal="PD", label="Палладий", prefix="PLD",    world="PA=F",  world_label="NYMEX",
+         unit="унция", world_factor=1.0),
+    dict(metal="CU", label="Медь",     prefix="COPPER", world="HG=F",  world_label="COMEX",
+         unit="тонна", world_factor=LB_PER_TONNE),
+    dict(metal="AL", label="Алюминий", prefix="ALUM",   world="ALI=F", world_label="LME",
+         unit="тонна", world_factor=1.0),
 ]
 
 FORTS_LIST_URL = "http://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
@@ -671,7 +686,7 @@ def fetch_metals(days: int = METALS_DAYS):
                     continue
                 d = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
                 db.execute("INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
-                           (f"metal_{m['metal']}_world", d, float(price)))
+                           (f"metal_{m['metal']}_world", d, float(price) * m["world_factor"]))
                 n += 1
             # живая котировка перекрывает дневную строку сегодняшнего дня:
             # COMEX торгует почти круглосуточно, «закрытие» в течение дня —
@@ -683,7 +698,7 @@ def fetch_metals(days: int = METALS_DAYS):
                 day = (datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
                        if ts else today)
                 db.execute("INSERT OR REPLACE INTO econ_series (key, period, value) VALUES (?,?,?)",
-                           (f"metal_{m['metal']}_world", day, float(live)))
+                           (f"metal_{m['metal']}_world", day, float(live) * m["world_factor"]))
                 n += 1
             rows_saved.append((m["label"], shortname, secid))
     print(f"[metals] записано {n} значений; контракты: "
@@ -838,7 +853,9 @@ def econ_seed():
         need_info = not has("SELECT COUNT(*) FROM ofz_info")
         need_rates = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'rate_%'")
         need_real = not has("SELECT COUNT(*) FROM econ_series WHERE key IN ('ippe_idx','unemp_rate')")
-        need_metals = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'metal_%'")
+        metal_keys = has("SELECT COUNT(DISTINCT key) FROM econ_series WHERE key LIKE 'metal_%'")
+        # по одному ключу на площадку с металла: недобрало — значит добавили новый металл
+        need_metals = metal_keys < 2 * len(METALS)
 
     if need_bonds:
         try:
