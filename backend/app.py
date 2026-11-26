@@ -1240,6 +1240,41 @@ def metals():
     })
 
 
+@app.route("/api/prokat", methods=["GET"])
+def prokat():
+    """
+    GET /api/prokat — цены на металлопрокат, двумя рядами:
+      • rosstat — официальные средние цены производителей (Росстат), ₽ за тонну,
+        по Российской Федерации, месячные, с 2021 г.;
+      • dealer  — мониторинг журнала «Металлоснабжение и сбыт»: дилерские цены
+        Центрального региона (Москва), ₽ за тонну, шаг ~2 недели. Здесь же
+        арматура, которой нет в статистике.
+    meta хранит, из какого файла и на какую дату данные, — фронт показывает
+    это в подписи, а не делает вид, что цена «сегодняшняя».
+    """
+    def shape(items):
+        out = []
+        for p in items:
+            rows = db.execute(
+                "SELECT period, value FROM econ_series WHERE key = ? ORDER BY period",
+                (p["key"],)).fetchall()
+            meta = econ.ECON_SERIES[p["key"]]
+            out.append({"key": p["key"], "label": meta["label"], "unit": meta["unit"],
+                        "explain": meta["explain"], "source": meta["source"],
+                        "code": p.get("code"), "assort": p.get("assort"),
+                        "series": [{"period": r["period"], "value": r["value"]} for r in rows]})
+        return out
+
+    with get_db() as db:
+        body = {
+            "rosstat": shape(econ.PROKAT_ROSSTAT),
+            "dealer": shape(econ.PROKAT_DEALER + [dict(key="dk_index")]),
+            "meta": {r["key"]: r["value"]
+                     for r in db.execute("SELECT key, value FROM prokat_meta")},
+        }
+    return jsonify(body)
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Для дашбордов и себя: жив ли сервис и что в базе."""

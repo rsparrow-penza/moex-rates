@@ -15,6 +15,7 @@ import TopBanks from './TopBanks.jsx'
 import Econ from './Econ.jsx'
 import Metals from './Metals.jsx'
 import Ofz from './Ofz.jsx'
+import Prokat from './Prokat.jsx'
 import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
 import Inflation from './Inflation.jsx'
@@ -257,7 +258,7 @@ function RatesApp({ tab = 'fx' }) {
       )}
 
       {/* Биржевые цены на металлы: ФОРТС + мир, $ за унцию или тонну */}
-      {tab === 'metals' && <Metals />}
+      {tab === 'metals' && (<><Metals /><Prokat /></>)}
 
       {/* Доллевой рынок: кривая ОФЗ и её история */}
       {tab === 'ofz' && <Ofz />}

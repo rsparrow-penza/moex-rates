@@ -6,6 +6,7 @@ import io
 import os
 import tempfile
 import unittest
+from datetime import date
 from unittest import mock
 
 _tmpdb = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -328,6 +329,177 @@ class TestMetalsEndpoint(unittest.TestCase):
         self.assertEqual(au["world"], 3558.5)
         self.assertEqual(body["contracts"][0]["shortname"], "GOLD-12.26")
         self.assertEqual(body["metals"][0]["label"], "Золото")
+
+
+
+class TestProkatRosstat(unittest.TestCase):
+    """Парсер файла «Средние цены производителей на отдельные виды
+    промышленных товаров»: три разных разметки листов в одном файле."""
+
+    @staticmethod
+    def _wb(sheets):
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.remove(wb.active)
+        for title, rows in sheets:
+            ws = wb.create_sheet(title)
+            for r in rows:
+                ws.append(r)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_values_below_product_row_and_units_column(self):
+        """2026: есть колонка единиц, значения в строке «Российская Федерация»."""
+        content = self._wb([
+            ("Содержание", [["Средние цены производителей"]]),
+            ("9", [
+                ["Средние цены производителей по РФ и ФО в 2026 г.", None, None, None],
+                ["на конец периода", None, None, None],
+                [None, None, None, None],
+                [None, "Код товара на основе ОКПД2", "Единицы измерения",
+                 "январь", "февраль", "март"],
+                ["Прокат листовой горячекатаный стальной", "24.10.3", "тонн", None, None, None],
+                ["Российская Федерация", None, None, 45556.23, 46492.0, "..."],
+                ["Центральный федеральный округ", None, None, 44669.95, 45035.47, 44732.23],
+                ["Прокат сортовой и катанка г/к (арматура)", "24.10.61", "тонн", None, None, None],
+                ["Российская Федерация", None, None, "...", "...", "..."],
+            ]),
+        ])
+        rows = econ.parse_prokat(content)
+        self.assertEqual(rows, [("pr_hrc_plate", "2026-01", 45556.23),
+                                ("pr_hrc_plate", "2026-02", 46492.0)])
+        # строка округа не должна удвоить РФ, а закрытая арматура — не появиться
+
+    def test_values_in_product_row_and_months_by_label(self):
+        """2021: колонок единиц нет, месяцы сдвинуты, значения в самой строке."""
+        content = self._wb([
+            ("4", [
+                ["Средние цены производителей ... в 2021 г.", None, None, None, None],
+                ["на конец периода", None, None, None, None],
+                ["рублей за тонну", None, None, None, None],
+                [None, "Код товара", "январь", "февраль", "март"],
+                ["Трубы стальные электросварные, т", "24.20.13.130", 52200.1, 52618.0, None],
+            ]),
+        ])
+        self.assertEqual(econ.parse_prokat(content),
+                         [("pr_pipe_ew", "2021-01", 52200.1),
+                          ("pr_pipe_ew", "2021-02", 52618.0)])
+
+    def test_annual_sheets_and_non_tonne_units_skipped(self):
+        """Годовые листы (1998–2020) и позиции не в тоннах — мимо."""
+        content = self._wb([
+            ("3", [
+                ["Средние цены производителей ... в 2017-2020 гг.", None, None, None],
+                [None, "Код товара", "Единицы измерения", "2017"],
+                ["Прокат листовой горячекатаный стальной", "24.10.3", "тонн", 34675],
+            ]),
+            ("9", [
+                ["Средние цены производителей ... в 2026 г.", None, None, None, None],
+                [None, "Код товара", "Единицы измерения", "январь"],
+                ["Профили листовые из нелегированной стали", "24.33.2", "м2", 451.0],
+                ["Российская Федерация", None, None, 451.0],
+            ]),
+        ])
+        self.assertEqual(econ.parse_prokat(content), [])
+
+    def test_registry_keys_are_unique_and_registered(self):
+        keys = [p["key"] for p in econ.PROKAT_ROSSTAT] + [p["key"] for p in econ.PROKAT_DEALER]
+        self.assertEqual(len(keys), len(set(keys)))
+        for k in keys + ["dk_index"]:
+            self.assertIn(k, econ.ECON_SERIES, f"{k} нет в реестре — /api/econ/meta его не опишет")
+            self.assertEqual(econ.ECON_SERIES[k]["group"], "prokat")
+
+
+class TestProkatDealer(unittest.TestCase):
+    """Разбор монитора МСиБ: ряд без дат бессмысленен, а не «примерный»."""
+
+    PAGE = ('<script>PAChart.chart.setLabels(["15-01-2025","31-01-2025","11-02-2025"]);'
+            'PAChart.chart.setDatasets([{"title":"Индекс"}]);</script>')
+
+    def test_labels_iso_and_order(self):
+        self.assertEqual(econ.parse_msib_labels(self.PAGE),
+                         ["2025-01-15", "2025-01-31", "2025-02-11"])
+
+    def test_labels_absent(self):
+        self.assertEqual(econ.parse_msib_labels("<html>нет графика</html>"), [])
+
+    def test_series_parses_strings_and_blanks(self):
+        # цены округляем до 0,1 ₽; «1.234,5» — европейская запись 1234,5
+        payload = {"data": ["53750.000", "…", None, "62 900,5", "1.234,5", 81500]}
+        self.assertEqual(econ.parse_msib_series(payload),
+                         [53750.0, None, None, 62900.5, 1234.5, 81500.0])
+
+    def test_rub_number_forms(self):
+        for raw, want in (("53750.000", 53750.0), ("62 900,5", 62900.5),
+                          ("103,4 2)", 103.4), ("…1)", None), ("...", None),
+                          ("38 525", 38525.0), (None, None), ("\u00a0", None),
+                          (12.5, 12.5), ("95,8", 95.8)):
+            self.assertEqual(econ._rub_number(raw), want, f"вход: {raw!r}")
+
+    def setUp(self):
+        # хранилище общее на весь модуль — иначе вчерашняя метка «ходили»
+        # глушит следующий тест
+        econ.set_prokat_meta(dealer_attempt="", dealer_asof="")
+
+    def _page_mock(self):
+        """МСиБ качается своим requests.get (WAF не любит econ.UA), не http_bytes."""
+        page = mock.Mock(text=self.PAGE)
+        page.raise_for_status.return_value = None
+        return mock.patch.object(econ.requests, "get", return_value=page)
+
+    def test_length_mismatch_writes_nothing(self):
+        """Дат три, цена одна — склеивать вслепую нельзя, точки уедут по датам."""
+        payload = {"data": ["53750.000"]}
+        with self._page_mock(), mock.patch.object(econ.requests, "post") as post:
+            post.return_value.json.return_value = payload
+            post.return_value.raise_for_status.return_value = None
+            self.assertEqual(econ.fetch_prokat_dealer(), 0)
+            self.assertFalse(econ.get_prokat_meta().get("dealer_asof"))
+
+    def test_dead_data_endpoint_stops_early(self):
+        """Эндпоинт ряда отдаёт 404 — не долбим оставшиеся 15 позиций."""
+        with self._page_mock(), mock.patch.object(
+                econ.requests, "post",
+                side_effect=econ.requests.exceptions.HTTPError("404")) as post:
+            self.assertEqual(econ.fetch_prokat_dealer(), 0)
+            self.assertEqual(post.call_count, 3)
+
+    def test_once_per_day_guard(self):
+        """Рестарт сервиса не должен выливаться в серию запросов к монитору."""
+        econ.set_prokat_meta(dealer_attempt=date.today().isoformat())
+        with self._page_mock() as page, mock.patch.object(econ.requests, "post") as post:
+            self.assertEqual(econ.fetch_prokat_dealer(), 0)
+            page.assert_not_called()
+            post.assert_not_called()
+            self.assertEqual(econ.fetch_prokat_dealer(force=True), 0)   # force проходит
+            self.assertEqual(page.call_count, 1)
+
+    def test_two_week_cadence_skips_site(self):
+        """Наблюдение двухнедельное: пока оно свежее, на сайт не идём (иначе 403)."""
+        econ.set_prokat_meta(dealer_asof=date.today().isoformat())
+        with self._page_mock() as page, mock.patch.object(econ.requests, "post") as post:
+            self.assertEqual(econ.fetch_prokat_dealer(), 0)
+            page.assert_not_called()
+            post.assert_not_called()
+        econ.set_prokat_meta(dealer_asof="")          # не отравляем остальные тесты
+
+
+class TestProkatEndpoint(unittest.TestCase):
+    def test_api_prokat_shape(self):
+        with rates.get_db() as db:
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('pr_hrc_plate','2026-08',52573.05)")
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('pr_hrc_plate','2026-09',54556.33)")
+            db.execute("INSERT OR REPLACE INTO econ_series VALUES ('dk_rebar10','2026-11-03',53750)")
+            db.execute("INSERT OR REPLACE INTO prokat_meta VALUES ('rosstat_asof','2026-09')")
+        body = rates.app.test_client().get("/api/prokat").json
+        plate = [x for x in body["rosstat"] if x["key"] == "pr_hrc_plate"][0]
+        self.assertEqual(plate["unit"], "₽/т")
+        self.assertEqual(plate["series"][-1], {"period": "2026-09", "value": 54556.33})
+        rebar = [x for x in body["dealer"] if x["key"] == "dk_rebar10"][0]
+        self.assertEqual(rebar["source"], "MSIB")
+        self.assertEqual(body["meta"]["rosstat_asof"], "2026-09")
+
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 # Python
 __pycache__/
 *.pyc
+# база SQLite + WAL-сайдкары (journal_mode=WAL создаёт их рядом)
 *.db
+*.db-wal
+*.db-shm
 
 # Node.js
 node_modules/

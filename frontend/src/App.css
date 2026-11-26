@@ -945,6 +945,16 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .mt-chg.down, .mt-basis.down { color: #ff6b6b; }
 .mt-gram { color: #8fd3c7; }
 .mt-empty { color: #55556a; }
+.pk-h3 {
+  margin: 22px 0 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #e9e9f2;
+  border-top: 1px solid #2c2c40;
+  padding-top: 14px;
+  cursor: help;
+}
+
 .mt-spark polyline { fill: none; stroke-width: 1.4; }
 .mt-spark .mt-axis { stroke: #33334a; stroke-width: 1; }
 .mt-spark .mt-axis-label { fill: #6b6b82; font-size: 7px; }

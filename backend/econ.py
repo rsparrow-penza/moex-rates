@@ -36,6 +36,7 @@ import re
 import io
 import json
 import sqlite3
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
@@ -134,8 +135,14 @@ ECON_SERIES = {
     # — ОФЗ, ММВБ: динамические ключи bond_yld_<SECID> добавляются в рантайме —
 }
 
-# Корзина ОФЗ: ликвидные фиксированные купоны от 1.5 до ~15 лет (данные на
-# 25.11.2026, обороты дня с ТQOB). YIELD берём из marketdata ММВБ.
+# Корзина ОФЗ: постоянный купон (ОФЗ-ПД), погашение 2027–2041, примерно по
+# выпуску на каждые полтора года. Из 33 подходящих ПД на борта TQOB взято 12 —
+# состав зафиксирован именно здесь, а не собирается по обороту дня: иначе
+# менялся бы сам ряд и история доходностей стала бы несравнимой.
+# Обороты взятых выпусков 30–1800 млн ₽/день (снято 26.11.2026) — у 26235 и
+# 26207 он тонкий, это отмечено в пояснении на вкладке. ОФЗ-ПК и ОФЗ-ИН не
+# берём сознательно: их доходность — про ставку и инфляцию, а не про срок.
+# YIELD берём из marketdata ММВБ.
 OFZ_UNIVERSE = [
     ("SU26207RMFS9", "ОФЗ 26207", "2027-02-03"),
     ("SU26236RMFS8", "ОФЗ 26236", "2028-05-17"),
@@ -715,6 +722,413 @@ MANUAL_SERIES = ["retail_turnover", "retail_yoy"]
 
 
 # ---------------------------------------------------------------------------
+# Металлопрокат: средние цены производителей (Росстат) + мониторинг МСиБ
+# ---------------------------------------------------------------------------
+#
+# Здесь два ряда данных про одно и то же слово «прокат», и они принципиально
+# разные — потому и лежат отдельным блоком, а не в «Металлах» биржевых.
+#
+# 1) Росстат — «Средние цены производителей на отдельные виды промышленных
+#    товаров (с 1998 г.)». Ежемесячный XLSX, в нём настоящие ₽ за тонну по РФ и
+#    федеральным округам. Имя файла ротируется по месяцам
+#    (Proizvoditeli_Cena_MM-YYYY.xlsx) и архивных ссылок на странице нет,
+#    поэтому имя сначала ресолвим по странице «Цены, инфляция», и только потом
+#    качаем — та же схема, что с квартальными файлами РРДД.
+#    Берём листы 2021+ : в листах 1–3 (1998–2020) стоят ГОДОВЫЕ средние, и
+#    класть их в один ряд с месячными нельзя — график начал бы врать масштабом.
+#
+#    Арматуры в этом блоке нет намеренно. Она входит в группировку 24.10.61
+#    «Прокат сортовой и катанка горячекатаные со свободной намоткой в бухты из
+#    нелегированных сталей», и по Российской Федерации она закрыта прочерками
+#    «…»: Росстат её не раскрывает. Придумать вместо неё «арматуру» из
+#    соседней группировки было бы подтасовкой, так что арматура — из пункта 2.
+#
+# 2) Мониторинг журнала «Металлоснабжение и сбыт» (metalinfo.ru). Это НЕ биржа
+#    и НЕ статистика: опрос металлотрейдеров Центрального региона (Москва) с
+#    шагом примерно раз в две недели, «средняя цена» конкретной сортопозиции.
+#    Он даёт то, чего нет у Росстата — арматуру, балку 30Б1, швеллер, лист по
+#    конкретным размерам, — и потому показан отдельной таблицей со своей
+#    подписью источника, а не смешан с официальными ценами.
+#
+# Neither ММВБ, ни СПбМТСБ, ни fedstat прокатом не помогли: на ФОРТС из 536
+# контрактов металлургических нет ни одного (движок commodity — это НТБ:
+# нефть, кокс, зерно), spmb.ru снаружи отдаёт только антибот-оболочку, fedstat
+# — 403. Проверено 26.11.2026.
+
+ROSRAT_PROKAT_PAGE = "https://www.rosstat.gov.ru/storage/mediabank/"
+ROSRAT_PROKAT_INDEX = "https://www.rosstat.gov.ru/statistics/price"
+PROKAT_MIN_YEAR = 2021          # см. выше: годовые листы в месячный ряд нельзя
+
+# code — ОКПД2-группировка из файла; label — короткая метка на карточке,
+# полная формулировка источника живёт в explain (как в остальных блоках).
+PROKAT_ROSSTAT = [
+    dict(code="24.10.11.120", key="pr_pig", label="Чугун передельный",
+         explain="чушки и прочие первичные формы — сырьё для сталеплавильного передела; "
+                 "средняя цена завода за тонну, без НДС"),
+    dict(code="24.10.21", key="pr_ingot", label="Сталь в слитках",
+         explain="нелегированная сталь в слитках и прочих первичных формах — полупродукт, "
+                 "от него считается себестоимость проката"),
+    dict(code="24.10.3", key="pr_hrc_plate", label="Лист г/к",
+         explain="прокат листовой горячекатаный стальной без дополнительной обработки — "
+                 "самая ходовая позиция для конструкций и сварки"),
+    dict(code="24.10.41", key="pr_crc_plate", label="Лист х/к",
+         explain="прокат листовой холоднокатаный из прочих нелегированных сталей — тоньше, "
+                 "ровнее, дороже; идёт в корпуса, трубы и штамповку"),
+    dict(code="24.10.62", key="pr_forge", label="Сортовой, кованый/г/к",
+         explain="прокат сортовой и катанка стальные прочие (кованые, горячекатаные, "
+                 "горячетянутые) — сюда попадают круг, квадрат и полоса"),
+    dict(code="24.10.71", key="pr_beam", label="Балка (профили г/к)",
+         explain="профили незамкнутые горячекатаные из нелегированной стали — двутавр и "
+                 "швеллер, то, чем ставят каркасы и перекрытия"),
+    dict(code="24.20.13.130", key="pr_pipe_ew", label="Трубы э/с",
+         explain="трубы стальные электросварные общего назначения — водопровод, отопления, "
+                 "каркасы; цена за тонну, не за метр"),
+    dict(code="24.20.13.160", key="pr_pipe_wgp", label="Трубы ВГП",
+         explain="трубы стальные водогазопроводные — бытовой контур: вода и газ"),
+    dict(code="24.34.1", key="pr_wire", label="Проволока",
+         explain="проволока холоднотянутая — вязальная, сетки, канаты; сильнее всех "
+                 "зависит от спроса на стройке"),
+]
+
+# assort — id сортопозиции в мониторинге МСиБ (проверено 26.11.2026: 41–58,
+# подписи и значения совпали с таблицей на самой странице).
+PROKAT_DEALER = [
+    dict(assort=41, key="dk_rebar10", label="Арматура А500С ф10"),
+    dict(assort=42, key="dk_rebar12", label="Арматура А500С ф12"),
+    dict(assort=43, key="dk_rebar8", label="Арматура В500С ф8"),
+    dict(assort=44, key="dk_wire_r", label="Проволока вр ф4-5"),
+    dict(assort=45, key="dk_wire_ann", label="Проволока ок ф1,2"),
+    dict(assort=46, key="dk_wirerod", label="Катанка ф6,5"),
+    dict(assort=47, key="dk_hrc4", label="Лист г/к 4"),
+    dict(assort=48, key="dk_crc", label="Лист х/к 0,8-1"),
+    dict(assort=49, key="dk_galv", label="Лист оцинк. 0,55"),
+    dict(assort=50, key="dk_wgp20", label="Труба ВГП 20х2,8"),
+    dict(assort=51, key="dk_wgp32", label="Труба ВГП 32х3,2"),
+    dict(assort=52, key="dk_ew89", label="Труба э/с 89х3,5"),
+    dict(assort=53, key="dk_ew102", label="Труба э/с 102х3,5"),
+    dict(assort=54, key="dk_angle", label="Уголок р/п 63х5-6"),
+    dict(assort=55, key="dk_ch10", label="Швеллер 10"),
+    dict(assort=56, key="dk_ch12", label="Швеллер 12"),
+    dict(assort=57, key="dk_beam30b1", label="Балка 30Б1"),
+    dict(assort=58, key="dk_beam30sh1", label="Балка 30Ш1"),
+]
+
+for _p in PROKAT_ROSSTAT:
+    ECON_SERIES[_p["key"]] = dict(label=_p["label"], unit="₽/т", group="prokat",
+                                  source="ROSSTAT", explain=_p["explain"])
+for _p in PROKAT_DEALER:
+    ECON_SERIES[_p["key"]] = dict(
+        label=_p["label"], unit="₽/т", group="prokat", source="MSIB",
+        explain="дилерская цена конкретной сортопозиции, ₽ за тонну: опрос "
+                "металлотрейдеров Центрального региона (Москва), шаг ~2 недели")
+ECON_SERIES["dk_index"] = dict(
+    label="Свод по 18 позициям", unit="₽/т", group="prokat", source="MSIB",
+    explain="считаем сами: среднее арифметическое по всем позициям мониторинга "
+            "МСиБ на дату наблюдения — прокси «прокат в целом», а не индекс сайта")
+
+MSIB_STAT_URL = "https://metalinfo.ru/ru/metalmarket/statistics"
+MSIB_DEPTH_YEARS = 7          # сайт отдаёт ряд с 2019 года без потери качества
+# У Мониторинга цен за WAF: наш «серверный» UA (Linux/Chrome) он режет 403,
+# а браузерный пропускает. Плюс набор sec-* заголовков — как у реального
+# Chrome, потому что выборочно по одному заголовку фильтр не срабатывает.
+MSIB_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not?A_Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Upgrade-Insecure-Requests": "1",
+}
+# наблюдение выходит раз ~в две недели, а бан по частоте запросов — реальная
+# угроза (ловили 403 после серий). Поэтому ходим на сайт только когда старый
+# ряд действительно мог обновиться.
+MSIB_MIN_AGE_DAYS = 10
+
+
+# --- Росстат ---------------------------------------------------------------
+
+def _prokat_layout(grid):
+    """
+    Разметка листов между годами разъезжается: в 2021–2023 значения лежат в
+    самой строке товара, в 2024–2025 — строкой ниже («Российская Федерация»),
+    а в 2026 добавлена колонка «Единицы измерения» и месяцы сдвигаются. Поэтому
+    колонку месяца ищем по подписи, а не по индексу (как в файлах ЦБ).
+    """
+    year = None
+    for r in grid[:12]:
+        if not r or not r[0]:
+            continue
+        m = re.search(r"в\s+(\d{4})\s*г", _norm(r[0]))
+        if m:
+            year = int(m.group(1))
+            break
+    months, units_col = {}, None
+    for r in grid[:12]:
+        found = {}
+        for i, c in enumerate(r):
+            s = _norm(c)
+            if s in MONTHS_RU:
+                found[MONTHS_RU[s]] = i
+            elif s.startswith("единиц") and units_col is None:
+                units_col = i
+        if len(found) >= 3:
+            months = found
+            break
+    return year, months, units_col
+
+
+def _prokat_values(row, months):
+    """[(номер месяца, значение)] из строки; «…», «...» и «…1)» — это не данные."""
+    out = []
+    for m, i in sorted(months.items()):
+        v = _rub_number(row[i] if i < len(row) else None)
+        if v is not None and v > 0:
+            out.append((m, round(v, 2)))
+    return out
+
+
+def parse_prokat(content: bytes):
+    """→ [(key, 'YYYY-MM', ₽/т)] по РФ, только позиции в тоннах."""
+    from openpyxl import load_workbook
+    by_code = {p["code"]: p for p in PROKAT_ROSSTAT}
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    rows = []
+    for sheet in wb.sheetnames:
+        grid = list(wb[sheet].iter_rows(values_only=True))
+        year, months, units_col = _prokat_layout(grid)
+        if not year or year < PROKAT_MIN_YEAR or not months:
+            continue                       # годовые средние и содержание — мимо
+        for i, r in enumerate(grid):
+            code = _norm(r[1]) if len(r) > 1 and r[1] is not None else ""
+            pos = by_code.get(code)
+            if not pos:
+                continue
+            if units_col is not None and units_col < len(r):
+                if "тонн" not in _norm(r[units_col]):
+                    continue               # ₽/м² и ₽/шт в ₽/т не превращаем
+            vals = _prokat_values(r, months)
+            if not vals and i + 1 < len(grid):
+                nxt = grid[i + 1]
+                if nxt and _norm(nxt[0]).startswith("российская федерация"):
+                    vals = _prokat_values(nxt, months)
+            rows.extend((pos["key"], f"{year}-{m:02d}", v) for m, v in vals)
+    return rows
+
+
+def resolve_prokat_file():
+    """→ (содержимое, имя файла) или (None, None)."""
+    names = []
+    try:
+        page = http_bytes(ROSRAT_PROKAT_INDEX, timeout=40).decode("utf-8", "replace")
+        found = re.findall(r"/storage/mediabank/(Proizvoditeli_Cena_(\d{2})-(\d{4})\.xlsx)", page)
+        names = [n for n, _m, _y in sorted(set(found), key=lambda t: (t[2], t[1]), reverse=True)]
+    except requests.RequestException as e:
+        print(f"[prokat] страница Росстата недоступна ({e}), перебираем имена файлов")
+    if not names:                          # страница не отдала — угадываем месяц
+        y, mo = date.today().year, date.today().month
+        for _ in range(8):
+            mo -= 1
+            if mo == 0:
+                y, mo = y - 1, 12
+            names.append(f"Proizvoditeli_Cena_{mo:02d}-{y:04d}.xlsx")
+    for name in names:
+        try:
+            content = http_bytes(ROSRAT_PROKAT_PAGE + name, timeout=90)
+            # XLSX = zip («PK»): страница-заглушка Росстата тоже большая по
+            # размеру, так что подписи файла верят, а не длине ответа
+            if content[:2] == b"PK":
+                return content, name
+        except requests.RequestException:
+            continue
+    return None, None
+
+
+def set_prokat_meta(**kv):
+    with _conn() as db:
+        for k, v in kv.items():
+            db.execute("INSERT OR REPLACE INTO prokat_meta (key, value) VALUES (?, ?)",
+                       (k, str(v)))
+
+
+def get_prokat_meta():
+    with _conn() as db:
+        return {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM prokat_meta")}
+
+
+def fetch_prokat():
+    """Месячные средние цены производителей (Росстат), ₽ за тонна, по РФ."""
+    content, name = resolve_prokat_file()
+    if not content:
+        print("[prokat] Росстат: файл со средними ценами производителей не найден")
+        return 0
+    if get_prokat_meta().get("rosstat_file") == name:
+        print(f"[prokat] Росстат: {name} уже загружен — файл за месяц не менялся")
+        return 0
+    rows = parse_prokat(content)
+    if not rows:
+        print(f"[prokat] Росстат: в {name} не нашли ни одной нашей позиции "
+              "(код товара переехал?) — ряды не трогаем")
+        return 0
+    upsert_series(rows)
+    last = max(p for _k, p, _v in rows)
+    set_prokat_meta(rosstat_file=name, rosstat_asof=last,
+                    rosstat_updated=date.today().isoformat())
+    keys = len({k for k, _p, _v in rows})
+    print(f"[prokat] Росстат {name}: {len(rows)} значений по {keys} позициям, "
+          f"последний период {last}")
+    return len(rows)
+
+
+# --- Мониторинг МСиБ -------------------------------------------------------
+
+def parse_msib_labels(html: str):
+    """Даты наблюдений из графика страницы: setLabels(["15-01-2025", …])."""
+    m = re.search(r"setLabels\(\s*\[([^\]]*)\]", html)
+    if not m:
+        return []
+    return [f"{y}-{mo}-{d}" for d, mo, y in re.findall(r'"(\d{2})-(\d{2})-(\d{4})"', m.group(1))]
+
+
+_FOOTNOTE = re.compile(r"\s*\d+\s*[\)\]]\s*$")
+# пробел-разделитель тысяч: между цифрами, дальше ровно три цифры
+_THOUSANDS = re.compile(r"(?<=\d)[\s\u00a0\u2009](?=\d{3}(?:\D|$))")
+
+
+def _rub_number(raw):
+    """
+    Число из «человеческой» строки статистики и выдачи МСиБ:
+      «53750.000» → 53750.0   «62 900,5» → 62900.5
+      «1.234,5»   → 1234.5    «103,4 2)» → 103.4   (выноска срезается)
+      «…1)», «...», None → None (это отсутствие данных, а не ноль)
+    Разделитель дробной части — последний из встретившихся; если он один,
+    запятая считается десятичной, а точка — тоже: файлы ЦБ и Росстата дают
+    «53750.000» именно как дробь, а не «53 миллиона».
+    """
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    t = _THOUSANDS.sub("", _FOOTNOTE.sub("", str(raw or "").strip()))
+    m = re.match(r"^(-?\d[\d.,]*)", t)
+    if not m:
+        return None
+    num = m.group(1)
+    if "," in num and "." in num:
+        dec = max(num.rfind(","), num.rfind("."))
+        num = num[:dec].replace(".", "").replace(",", "") + "." + num[dec + 1:]
+    elif "," in num:
+        num = num.replace(",", ".")
+    try:
+        return float(num)
+    except ValueError:
+        return None
+
+
+def parse_msib_series(payload):
+    """→ список цен той же длины, что data; вместо шума — None."""
+    out = []
+    for raw in payload.get("data", []) or []:
+        v = _rub_number(raw)
+        out.append(round(v, 1) if v and v > 0 else None)
+    return out
+
+
+def fetch_prokat_dealer(force: bool = False):
+    """
+    Ряды дилерских цен МСиБ (₽/т, Центральный регион). Страница отдаёт даты
+    графика, а сами ряды — отдельным ajax-эндпоинтом; склеиваем их только при
+    совпадении длин, иначе точки встали бы не на свои даты.
+
+    Без force выходим сразу, если последнее наблюдение моложе MSIB_MIN_AGE_DAYS:
+    мониторинг двухнедельный, а частые хождения на сайт кончаются 403.
+    """
+    asof = get_prokat_meta().get("dealer_asof")
+    if asof and not force:
+        try:
+            age = (date.today() - date.fromisoformat(asof)).days
+        except ValueError:
+            age = None
+        if age is not None and age < MSIB_MIN_AGE_DAYS:
+            print(f"[prokat/МСиБ] наблюдение от {asof} ({age} дн. назад) — "
+                  f"ряд двухнедельный, на сайт не идём")
+            return 0
+    today = date.today()
+    # повторный ход на сайт в тот же день — только по force: рестарт контейнера
+    # не должен превращаться в серию запросов к чужому WAF
+    if not force and get_prokat_meta().get("dealer_attempt") == today.isoformat():
+        print("[prokat/МСиБ] сегодня уже ходили на монитор — повтор не раньше завтра")
+        return 0
+    set_prokat_meta(dealer_attempt=today.isoformat())
+    params = {"stype": "price",
+              "startDate": f"01.01.{today.year - MSIB_DEPTH_YEARS}",
+              "endDate": today.strftime("%d.%m.%Y")}
+    query = urllib.parse.urlencode(params)
+    try:
+        r = requests.get(f"{MSIB_STAT_URL}?{query}", headers=MSIB_HEADERS, timeout=40)
+        r.raise_for_status()
+        page = r.text
+    except requests.RequestException as e:
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        hint = " (WAF монитора режет частые обращения — попробуем завтра)" if code == 403 else ""
+        print(f"[prokat/МСиБ] страница недоступна: {e}{hint}")
+        return 0
+    dates = parse_msib_labels(page)
+    if len(dates) < 2:
+        # сайт отдаёт эту же страницу и без блока графика (плавающая выдача) —
+        # это не поломка, просто в этом цикле рядов не будет
+        print("[prokat/МСиБ] дат наблюдений на странице нет — пропустивший цикл")
+        return 0
+    rows, by_date = [], {}
+    fails = 0
+    for pos in PROKAT_DEALER:
+        q = urllib.parse.urlencode(dict(params, assort=pos["assort"]))
+        body = dict(params, assort=pos["assort"])
+        try:
+            hdr = dict(MSIB_HEADERS, **{"X-Requested-With": "XMLHttpRequest",
+                                         "Referer": MSIB_STAT_URL,
+                                         "Accept": "application/json, text/javascript, */*; q=0.01"})
+            r = requests.post(f"{MSIB_STAT_URL}/data?{q}", headers=hdr,
+                              data=urllib.parse.urlencode(body), timeout=40)
+            r.raise_for_status()
+            payload = r.json()
+        except (requests.RequestException, ValueError) as e:
+            # отдают и страницу без графика, и эндпоинт ряда 404 — тогда нет
+            # смысла долбить оставшиеся 17 позиций
+            fails += 1
+            print(f"[prokat/МСиБ] {pos['label']}: {e}")
+            if fails >= 3:
+                print("[prokat/МСиБ] эндпоинт рядов не отвечает — останавливаю цикл")
+                break
+            continue
+        title = payload.get("title") or ""
+        if title and _norm(title) != _norm(pos["label"]):
+            print(f"[prokat/МСиБ] assort {pos['assort']}: сайт подписывает «{title}», "
+                  f"у нас «{pos['label']}» — ключ оставляем, подпись берём с сайта")
+            pos["label"] = title
+        vals = parse_msib_series(payload)
+        if len(vals) != len(dates):
+            print(f"[prokat/МСиБ] {pos['label']}: дат {len(dates)}, цен {len(vals)} — "
+                  f"ряд не пишем, чтобы не сдвинуть точки")
+            continue
+        for d, v in zip(dates, vals):
+            if v is None:
+                continue
+            rows.append((pos["key"], d, v))
+            by_date.setdefault(d, []).append(v)
+    rows.extend(("dk_index", d, round(sum(vs) / len(vs), 1))
+                for d, vs in by_date.items() if vs)
+    if not rows:
+        print("[prokat/МСиБ] ни одного ряда не забрали — оставляем то, что в базе")
+        return 0
+    upsert_series(rows)
+    set_prokat_meta(dealer_asof=dates[-1], dealer_dates=len(dates),
+                    dealer_positions=len(by_date.get(dates[-1], [])),
+                    dealer_updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    print(f"[prokat/МСиБ] записано {len(rows)} значений, наблюдение на {dates[-1]}")
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # Инициализация схемы и регистрация задач
 # ---------------------------------------------------------------------------
 
@@ -786,6 +1200,13 @@ def init_econ_db():
             """)
         db.execute(
             """
+            CREATE TABLE IF NOT EXISTS prokat_meta (
+                key   TEXT PRIMARY KEY,   -- rosstat_file | rosstat_asof | dealer_asof…
+                value TEXT NOT NULL
+            )
+            """)
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS budget_meta (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 as_of TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -832,6 +1253,20 @@ def register_jobs(scheduler):
         except Exception as e:
             print(f"[metals] сбой: {e}")
 
+    def job_prokat():
+        # Росстат выкладывает месячные цены ~11-го числа, МСиБ — раз в две
+        # недели; обоим хватает одного раза в сутки (имя файла Росстата
+        # сверяется без повторной загрузки 2,5 МБ)
+        try:
+            fetch_prokat()
+        except Exception as e:
+            print(f"[prokat] сбой: {e}")
+        try:
+            fetch_prokat_dealer()
+        except Exception as e:
+            print(f"[prokat/МСиБ] сбой: {e}")
+
+    scheduler.add_job(job_prokat, "interval", hours=24, id="econ_prokat")
     scheduler.add_job(job_rates, "interval", hours=12, id="econ_rates")
     scheduler.add_job(job_real, "interval", hours=24, id="econ_real")
     scheduler.add_job(job_ofz, "interval", hours=12, id="econ_ofz")
@@ -854,6 +1289,8 @@ def econ_seed():
         need_rates = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'rate_%'")
         need_real = not has("SELECT COUNT(*) FROM econ_series WHERE key IN ('ippe_idx','unemp_rate')")
         metal_keys = has("SELECT COUNT(DISTINCT key) FROM econ_series WHERE key LIKE 'metal_%'")
+        pr_keys = has("SELECT COUNT(DISTINCT key) FROM econ_series WHERE key LIKE 'pr_%'")
+        dk_keys = has("SELECT COUNT(DISTINCT key) FROM econ_series WHERE key LIKE 'dk_%'")
         # по одному ключу на площадку с металла: недобрало — значит добавили новый металл
         need_metals = metal_keys < 2 * len(METALS)
 
@@ -886,3 +1323,14 @@ def econ_seed():
             fetch_metals()
         except Exception as e:
             print(f"[econ/seed] metals: {e}")
+    # прокат: позиции добавились в реестр — недобранные ключи подтянутся сами
+    if pr_keys < len(PROKAT_ROSSTAT):
+        try:
+            fetch_prokat()
+        except Exception as e:
+            print(f"[econ/seed] prokat/Росстат: {e}")
+    if dk_keys < len(PROKAT_DEALER) + 1:          # +1 — сводный ряд dk_index
+        try:
+            fetch_prokat_dealer()
+        except Exception as e:
+            print(f"[econ/seed] prokat/МСиБ: {e}")
