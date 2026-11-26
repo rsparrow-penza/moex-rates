@@ -1076,6 +1076,23 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 .ec-table td.ec-chg.up { color: #69db7c; }
 .ec-table td.ec-chg.down { color: #ff6b6b; }
 
+/* выведенный выпуск: строка остаётся в таблице, но не притворяется живой */
+.ec-retired td { opacity: 0.55; }
+.ec-retired .ec-yld, .ec-retired .ec-price { text-decoration: line-through;
+                                             text-decoration-color: #4a4a66; }
+.ec-badge {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid #3a3a52;
+  white-space: nowrap;
+}
+.ec-badge.soon { color: #ffd43b; border-color: #6b5d20; }
+.ec-badge.off { color: #86869a; }
+.ec-chip.off { opacity: 0.5; }
+
 /* плитка реального сектора */
 .ec-tiles {
   display: grid;

@@ -1094,6 +1094,7 @@ def econ_bonds():
     till = request.args.get("to") or datetime.now(MSK).date().isoformat()
     since = request.args.get("from") or (
         datetime.now(MSK).date() - timedelta(days=365)).isoformat()
+    today = datetime.now(MSK).date().isoformat()
     with get_db() as db:
         snap_date = db.execute(
             "SELECT MAX(snap_date) AS d FROM ofz_snapshot").fetchone()["d"]
@@ -1101,12 +1102,47 @@ def econ_bonds():
         # номинал, объём — они меняются редко, но фронту нужны в той же строке
         curve = db.execute(
             "SELECT s.secid, s.shortname, s.matdate, s.yield_prc, s.price_prc,"
-            " s.price_chg_prc, s.accrued, s.valtoday_rur,"
+            " s.price_chg_prc, s.accrued, s.valtoday_rur, s.snap_date,"
             " i.issuedate, i.coupon_prc, i.face_rur, i.issue_size_mlrd"
             " FROM ofz_snapshot s LEFT JOIN ofz_info i USING (secid)"
             " WHERE s.snap_date = ? ORDER BY s.matdate", (snap_date,)).fetchall() if snap_date else []
+        curve = [dict(c) for c in curve]
+        seen = {c["secid"] for c in curve}
+        # planned exit: выпуск ещё торгуется, но его выход из корзины известен
+        for c in curve:
+            lin = econ.OFZ_LINEAGE.get(c["secid"])
+            if not lin:
+                continue
+            c["exit_date"] = lin["exit"]
+            c["replaced_by"] = lin["replaced_by"]
+            c["replaced_by_name"] = econ.OFZ_NAMES.get(lin["replaced_by"], lin["replaced_by"])
+            # раз выпуск лежит в сегодняшнем снимке — биржа его ещё торгует,
+            # и серой строки делать нельзя: дата погашения по календарю это
+            # ещё не вывод с рынка (эмиссию делистят через несколько дней).
+            # «Погашен» включается только когда строка из сегодняшнего снимка
+            # исчезла — ниже, в ветке выведенных
+            c["retired"] = False
+        # выведенные: биржа их уже не отдаёт, и в сегодняшнем снимке их нет —
+        # берём последнюю реальную запись, чтобы строка не исчезала молча
+        for secid, lin in econ.OFZ_LINEAGE.items():
+            if secid in seen or lin["exit"] >= today:
+                continue
+            last = db.execute(
+                "SELECT s.secid, s.shortname, s.matdate, s.yield_prc, s.price_prc,"
+                " s.price_chg_prc, s.accrued, s.valtoday_rur, s.snap_date,"
+                " i.issuedate, i.coupon_prc, i.face_rur, i.issue_size_mlrd"
+                " FROM ofz_snapshot s LEFT JOIN ofz_info i USING (secid)"
+                " WHERE s.secid = ? ORDER BY s.snap_date DESC LIMIT 1", (secid,)).fetchone()
+            if not last:
+                continue      # вывод случился до того, как мы вели запись — выдумывать нечего
+            row = dict(last)
+            row.update({"exit_date": lin["exit"], "retired": True,
+                        "replaced_by": lin["replaced_by"],
+                        "replaced_by_name": econ.OFZ_NAMES.get(lin["replaced_by"], lin["replaced_by"])})
+            curve.append(row)
+        curve.sort(key=lambda c: c["matdate"])
         series = {}
-        for secid, _sn, _md in econ.OFZ_UNIVERSE:
+        for secid, _sn, _md in list(econ.OFZ_UNIVERSE) + [(k, "", "") for k in econ.OFZ_LINEAGE]:
             rows = db.execute(
                 "SELECT period, value FROM econ_series WHERE key = ?"
                 " AND period >= ? AND period <= ? ORDER BY period",

@@ -1,5 +1,11 @@
 // Ofz.jsx — закладка «ОФЗ»: кривая доходностей и состав корзины.
 //
+// Выпуск не исчезает из таблицы молча: когда OFZ_LINEAGE говорит, что он
+// вышел (погашение наступило), бэкенд подставляет его последнюю реальную
+// запись с флагом retired — строка становится серой и подписывает, чем её
+// заменили. Такие строки участвуют в графике (сравнить «как было» можно), но
+// не участвуют в наклоне кривой и в счётчике корзины.
+//
 // Данные: GET /api/econ/bonds — снимок кривой (последний дневной, ММВБ борт
 // TQOB) плюс история YIELDCLOSE по каждому выпуску за год. Таблица отвечает
 // на вопрос «сколько просят сегодня», график — «как менялись ожидания»:
@@ -37,11 +43,17 @@ export default function Ofz() {
   }, [])
 
   const curve = useMemo(() => (data?.curve || []).filter((c) => c.yield_prc != null), [data])
+  // вне расчёта — выведенные: иначе «наклон» и счётчик выпусков считались бы
+  // по бумагам, которых на рынке уже нет
+  const live = useMemo(() => curve.filter((c) => !c.retired), [curve])
 
-  // стабильный цвет на выпуск: индекс в отсортированной по погашению корзине
-  const colorOf = useMemo(
-    () => Object.fromEntries(curve.map((c, i) => [c.secid, PALETTE[i % PALETTE.length]])),
-    [curve])
+  // стабильный цвет на выпуск: индекс в отсортированной по погашению корзине;
+  // выведенный выпуск всегда серый — цвет здесь несёт смысл, а не украшение
+  const colorOf = useMemo(() => {
+    const colors = Object.fromEntries(live.map((c, i) => [c.secid, PALETTE[i % PALETTE.length]]))
+    curve.filter((c) => c.retired).forEach((c) => { colors[c.secid] = '#6c757d' })
+    return colors
+  }, [curve, live])
 
   // линии графика: история доходности каждого выбранного выпуска
   const series = useMemo(() => {
@@ -61,9 +73,10 @@ export default function Ofz() {
   if (!data) return <section className="ofz"><p className="hint">Загрузка кривой ОФЗ…</p></section>
   if (!curve.length) return null
 
-  const slope = curve.length > 1
-    ? curve[curve.length - 1].yield_prc - curve[0].yield_prc
+  const slope = live.length > 1
+    ? live[live.length - 1].yield_prc - live[0].yield_prc
     : null
+  const ru = (d) => (d ? d.split('-').reverse().join('.') : '—')
 
   return (
     <section className="ofz" aria-label="Рынок ОФЗ">
@@ -78,7 +91,9 @@ export default function Ofz() {
       </h2>
       <p className="cf-sub">
         Доходность к погашению, ММВБ борт «Т+: Гособлигации» · снимок {data.snap_date}
-        {' · '}корзина {curve.length} выпусков
+        {' · '}корзина {live.length} выпусков
+        {curve.length > live.length
+          ? ` + ${curve.length - live.length} выведенн${curve.length - live.length === 1 ? 'ый' : 'ых'}` : ''}
       </p>
 
       {/* ——— кривая сегодня ——— */}
@@ -94,13 +109,23 @@ export default function Ofz() {
                   c.accrued != null ? fmt2(c.accrued) : '—'
                 } ₽ · объём выпуска ${
                   c.issue_size_mlrd != null ? fmt1(c.issue_size_mlrd) : '—'
-                } млрд ₽ · оборот сегодня ${
+                } млрд ₽ · оборот ${c.retired ? 'в последний день торгов ' : 'сегодня '}${
                   c.valtoday_rur != null ? fmt1(c.valtoday_rur / 1e6) : '0'
-                } млн ₽`}
+                } млн ₽${c.replaced_by_name
+                  ? ` · ${c.retired ? 'погашен ' : 'выйдет '}${ru(c.exit_date)}, в корзине его место занимает ${c.replaced_by_name}` : ''}${
+                  c.retired ? ` · последняя биржевая запись ${c.snap_date}` : ''}`}
                 onClick={() => setPicked((p) =>
                   p.includes(c.secid) ? p.filter((k) => k !== c.secid) : [...p, c.secid])}
-                className={picked.includes(c.secid) ? 'row-on' : undefined}>
-              <td>{c.shortname}</td>
+                className={`${picked.includes(c.secid) ? 'row-on' : ''}${c.retired ? ' ec-retired' : ''}`.trim()}
+                aria-label={c.retired ? `${c.shortname}, погашен ${ru(c.exit_date)}` : c.shortname}>
+              <td>
+                {c.shortname}
+                {c.exit_date && (
+                  <em className={`ec-badge${c.retired ? ' off' : ' soon'}`}>
+                    {c.retired ? `погашен ${ru(c.exit_date)}` : `выйдет ${ru(c.exit_date)}`}
+                  </em>
+                )}
+              </td>
               <td className="ec-mat">{c.issuedate ?? '—'}</td>
               <td className="ec-mat">{c.matdate}</td>
               <td className="ec-cpn">{c.coupon_prc != null ? `${fmt2(c.coupon_prc)}%` : '—'}</td>
@@ -119,12 +144,13 @@ export default function Ofz() {
       <div className="ec-chips">
         {curve.map((c, i) => (
           <button key={c.secid} type="button"
-                  className={`ec-chip${picked.includes(c.secid) ? ' on' : ''}`}
+                  className={`ec-chip${picked.includes(c.secid) ? ' on' : ''}${c.retired ? ' off' : ''}`}
                   style={{ '--c': colorOf[c.secid] }}
-                  title={`погашение ${c.matdate}, купон ${c.coupon_prc != null ? fmt2(c.coupon_prc) + '%' : '—'}`}
+                  title={`погашение ${c.matdate}, купон ${c.coupon_prc != null ? fmt2(c.coupon_prc) + '%' : '—'}${
+                    c.retired ? ` · выведен ${ru(c.exit_date)}, замена — ${c.replaced_by_name ?? 'не выбрана'}` : ''}`}
                   onClick={() => setPicked((p) =>
                     p.includes(c.secid) ? p.filter((k) => k !== c.secid) : [...p, c.secid])}>
-            {c.shortname}
+            {c.shortname}{c.retired ? ' †' : ''}
           </button>
         ))}
       </div>
@@ -176,6 +202,19 @@ export default function Ofz() {
                   сроков: на 2036–2040 уже есть точки 26245, 26243, 26253, 26247,
                   а дальше 2041 горизонт не нужен. Корзину можно пересобрать —
                   но вместе с историей рядов.</td>
+            </tr>
+            <tr>
+              <th>Выведенные выпуски</th>
+              <td className="tb-how-form">OFZ_LINEAGE в econ.py</td>
+              <td>Дата погашения известна заранее, поэтому выпуск не исчезает
+                  из таблицы втихаря. Пока он торгуется — с жёлтой меткой
+                  «выйдет ДД.ММ.ГГГГ» и указанием преемника в подсказке; после
+                  погашения строка остаётся серой, с зачёркнутой доходностью,
+                  датой последней биржевой записи и подписью, чем выпуск
+                  заменён. Линия такого выпуска доступна на графике — сравнить
+                  «как было» можно, а вот в наклоне кривой и в счётчике корзины
+                  он не участвует. Первый записанный уход: ОФЗ 26207 (погашение
+                  03.02.2027) → ОФЗ 26232 (погашение 06.10.2027).</td>
             </tr>
             <tr>
               <th>Справочник выпуска</th>

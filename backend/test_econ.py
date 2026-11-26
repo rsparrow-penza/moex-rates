@@ -6,6 +6,7 @@ import io
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from datetime import date
 from unittest import mock
 
@@ -331,6 +332,97 @@ class TestMetalsEndpoint(unittest.TestCase):
         self.assertEqual(body["metals"][0]["label"], "Золото")
 
 
+
+
+class TestOfzLineage(unittest.TestCase):
+    """Выведенный выпуск не исчезает из таблицы молча (OFZ_LINEAGE)."""
+
+    GOING = "SU26207RMFS9"          # погашение 03.02.2027 — первый записанный уход
+    SUCC = "SU26232RMFS7"           # ОФЗ-ПД, погашение 06.10.2027
+    LASTDAY = "2019-12-30"          # дата «последней биржевой записи» в фейковом прошлом
+
+    def setUp(self):
+        # OFZ_LINEAGE — общий изменяемый словарь: копируем вложенные записи,
+        # иначе один тест оставит дату в прошлом для всех последующих
+        type(self).ORIG = {k: dict(v) for k, v in econ.OFZ_LINEAGE.items()}
+        data = {"securities": {"columns": ["SECID", "MATDATE", "ACCRUEDINT"],
+                               "data": [[a, m, 25.2] for a, _n, m in econ.OFZ_UNIVERSE]},
+                "marketdata": {"columns": ["SECID", "YIELD", "LAST", "LASTTOPREVPRICE",
+                                           "VALTODAY_RUR", "DURATION"],
+                               "data": [[a, 14.0 + i / 10, 99.0 - i / 5, 0,
+                                         1_000_000 * (i + 1), 100 + i]
+                                        for i, (a, _n, _m) in enumerate(econ.OFZ_UNIVERSE)]}}
+        with mock.patch.object(rates, "http_get_json", return_value=data):
+            econ.fetch_ofz_snapshot()
+
+    def tearDown(self):
+        econ.OFZ_LINEAGE.clear()
+        econ.OFZ_LINEAGE.update({k: dict(v) for k, v in self.ORIG.items()})
+        with rates.get_db() as db:
+            db.execute("DELETE FROM ofz_snapshot WHERE snap_date = ?", (self.LASTDAY,))
+
+    def _curve(self):
+        body = rates.app.test_client().get("/api/econ/bonds").json
+        return {c["secid"]: c for c in body["curve"]}, body
+
+    def _retire(self, secid):
+        """Симулируем свершившийся вывод: даты выхода нет в сегодняшнем снимке,
+        есть одна запись в прошлом."""
+        with rates.get_db() as db:
+            db.execute("DELETE FROM ofz_snapshot WHERE secid = ? AND snap_date != ?",
+                       (secid, self.LASTDAY))
+            db.execute("INSERT OR REPLACE INTO ofz_snapshot (snap_date, secid, shortname,"
+                       " matdate, yield_prc, price_prc, price_chg_prc, accrued, valtoday_rur)"
+                       " VALUES (?,?,?,?,?,?,?,?,?)",
+                       (self.LASTDAY, secid, "ОФЗ 26207", "2020-01-01",
+                        13.9, 99.1, 0.1, 25.2, 58_000_000))
+            db.execute("DELETE FROM ofz_snapshot WHERE secid = ? AND snap_date != ?",
+                       (secid, self.LASTDAY))
+        econ.OFZ_LINEAGE[secid] = {"exit": "2020-01-01", "replaced_by": self.SUCC}
+
+    def test_basket_covers_the_short_end(self):
+        """Преемник входит в корзину заранее, а не после погашения."""
+        self.assertIn(self.SUCC, [a for a, _n, _m in econ.OFZ_UNIVERSE])
+        row, _ = self._curve()
+        self.assertEqual(row[self.SUCC]["shortname"], "ОФЗ 26232")
+
+    def test_planned_exit_is_alive_but_annotated(self):
+        row, _ = self._curve()
+        c = row[self.GOING]
+        self.assertEqual(c["exit_date"], "2027-02-03")
+        self.assertFalse(c["retired"])                 # торгуется — серой не будет
+        self.assertEqual(c["replaced_by"], self.SUCC)
+        self.assertEqual(c["replaced_by_name"], "ОФЗ 26232")
+
+    def test_after_exit_row_survives_as_retired(self):
+        """Дата вышла: в сегодняшнем снимке выпуска нет — строка берётся из
+        последней реальной записи и несёт её дату."""
+        self._retire(self.GOING)
+        row, body = self._curve()
+        c = row[self.GOING]
+        self.assertTrue(c["retired"])
+        self.assertEqual(c["yield_prc"], 13.9)
+        self.assertEqual(c["snap_date"], self.LASTDAY)
+        self.assertEqual(c["replaced_by_name"], "ОФЗ 26232")
+        self.assertNotIn(self.GOING, [x["secid"] for x in body["curve"] if not x.get("retired")])
+
+    def test_past_maturity_but_still_traded_is_not_gray(self):
+        """Дата погашения прошла, но биржа ещё показывает выпуск (делистинг
+        через несколько дней) — серой строки не делаем, вывод = отсутствие в
+        сегодняшнем снимке, а не дата в календаре."""
+        econ.OFZ_LINEAGE[self.GOING] = {"exit": (
+            datetime.now().date() - timedelta(days=2)).isoformat(), "replaced_by": self.SUCC}
+        row, _ = self._curve()                      # снимок setUp'а — сегодняшняя строка есть
+        self.assertFalse(row[self.GOING]["retired"])
+        self.assertEqual(row[self.GOING]["exit_date"], econ.OFZ_LINEAGE[self.GOING]["exit"])
+
+    def test_retired_without_history_is_not_invented(self):
+        """Вывод случился раньше, чем мы вели записи, — строку не сочиняем."""
+        with rates.get_db() as db:
+            db.execute("DELETE FROM ofz_snapshot WHERE secid = ?", (self.GOING,))
+        econ.OFZ_LINEAGE[self.GOING] = {"exit": "2020-01-01", "replaced_by": self.SUCC}
+        row, _ = self._curve()
+        self.assertNotIn(self.GOING, row)
 
 class TestProkatRosstat(unittest.TestCase):
     """Парсер файла «Средние цены производителей на отдельные виды
