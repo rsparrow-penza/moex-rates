@@ -1100,11 +1100,17 @@ def fetch_prokat_dealer(force: bool = False):
                 print("[prokat/МСиБ] эндпоинт рядов не отвечает — останавливаю цикл")
                 break
             continue
-        title = payload.get("title") or ""
-        if title and _norm(title) != _norm(pos["label"]):
+        # подпись берём с сайта, но только если это строка: иначе мусор из
+        # ответа уехал бы в ECON_SERIES и вывалился бы /api/econ/meta
+        title = payload.get("title")
+        if isinstance(title, str) and title and _norm(title) != _norm(pos["label"]):
             print(f"[prokat/МСиБ] assort {pos['assort']}: сайт подписывает «{title}», "
                   f"у нас «{pos['label']}» — ключ оставляем, подпись берём с сайта")
             pos["label"] = title
+            # фронт читает подписи из ECON_SERIES (он собирается при импорте),
+            # поэтому правим оба места — иначе расхождение осталось бы только
+            # в логе, а на странице висела бы наша старая формулировка
+            ECON_SERIES[pos["key"]]["label"] = title
         vals = parse_msib_series(payload)
         if len(vals) != len(dates):
             print(f"[prokat/МСиБ] {pos['label']}: дат {len(dates)}, цен {len(vals)} — "

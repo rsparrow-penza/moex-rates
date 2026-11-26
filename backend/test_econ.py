@@ -468,12 +468,36 @@ class TestProkatDealer(unittest.TestCase):
     def test_once_per_day_guard(self):
         """Рестарт сервиса не должен выливаться в серию запросов к монитору."""
         econ.set_prokat_meta(dealer_attempt=date.today().isoformat())
-        with self._page_mock() as page, mock.patch.object(econ.requests, "post") as post:
+        page = mock.Mock(text="<html>блок графика отсутствует</html>")
+        page.raise_for_status.return_value = None
+        with mock.patch.object(econ.requests, "get", return_value=page) as get, \
+             mock.patch.object(econ.requests, "post") as post:
             self.assertEqual(econ.fetch_prokat_dealer(), 0)
-            page.assert_not_called()
+            get.assert_not_called()                    # guard: на сайт не идём
             post.assert_not_called()
-            self.assertEqual(econ.fetch_prokat_dealer(force=True), 0)   # force проходит
-            self.assertEqual(page.call_count, 1)
+            self.assertEqual(econ.fetch_prokat_dealer(force=True), 0)
+            self.assertEqual(get.call_count, 1)        # force — страница запрошена
+
+    def test_site_title_wins_but_key_stays(self):
+        """Переименовали позицию на сайте — подпись уезжает за ним, ключ нет."""
+        payload = {"title": "Арм. А500С ф10 (новое имя)",
+                   "data": ["1", "2", "3"] * 3}
+        page = mock.Mock(text=self.PAGE)
+        page.raise_for_status.return_value = None
+        before = {k: econ.ECON_SERIES[k]["label"] for k in
+                  (p["key"] for p in econ.PROKAT_DEALER)}
+        with mock.patch.object(econ.requests, "get", return_value=page), \
+             mock.patch.object(econ.requests, "post") as post:
+            post.return_value.json.return_value = payload
+            post.return_value.raise_for_status.return_value = None
+            econ.fetch_prokat_dealer(force=True)
+        self.assertEqual(econ.ECON_SERIES[econ.PROKAT_DEALER[0]["key"]]["label"],
+                         "Арм. А500С ф10 (новое имя)")
+        # не отравляем остальные тесты: подписи и ключи обратно
+        for k, label in before.items():
+            econ.ECON_SERIES[k]["label"] = label
+        for pos in econ.PROKAT_DEALER:
+            pos["label"] = before[pos["key"]]
 
     def test_two_week_cadence_skips_site(self):
         """Наблюдение двухнедельное: пока оно свежее, на сайт не идём (иначе 403)."""
