@@ -5,8 +5,12 @@
 import io
 import os
 import tempfile
+from datetime import timezone
 import unittest
 from datetime import datetime, timedelta
+
+MSK_TZ = timezone(timedelta(hours=3))
+SESSION = datetime(2026, 11, 27, 12, 0, tzinfo=MSK_TZ)   # середина сессии
 from datetime import date
 from unittest import mock
 
@@ -95,7 +99,7 @@ class TestOfz(unittest.TestCase):
 
     def test_snapshot_written(self):
         with mock.patch.object(rates, "http_get_json", return_value=self.DATA):
-            rows = econ.fetch_ofz_snapshot()
+            rows = econ.fetch_ofz_snapshot(now=SESSION)
         self.assertEqual(len(rows), len(econ.OFZ_UNIVERSE))
         # дата погашения берётся у биржи, а не из константы корзины
         self.assertEqual(rows[0][3], econ.OFZ_UNIVERSE[0][2])
@@ -353,7 +357,7 @@ class TestOfzLineage(unittest.TestCase):
                                          1_000_000 * (i + 1), 100 + i]
                                         for i, (a, _n, _m) in enumerate(econ.OFZ_UNIVERSE)]}}
         with mock.patch.object(rates, "http_get_json", return_value=data):
-            econ.fetch_ofz_snapshot()
+            econ.fetch_ofz_snapshot(now=SESSION)
 
     def tearDown(self):
         econ.OFZ_LINEAGE.clear()
@@ -423,6 +427,102 @@ class TestOfzLineage(unittest.TestCase):
         econ.OFZ_LINEAGE[self.GOING] = {"exit": "2020-01-01", "replaced_by": self.SUCC}
         row, _ = self._curve()
         self.assertNotIn(self.GOING, row)
+
+class TestOfzBoard(unittest.TestCase):
+    """Живой борот целиком: таблица без ручной корзины + ленивая история."""
+
+    BOARD = {"securities": {
+                "columns": ["SECID", "SHORTNAME", "SECNAME", "LATNAME", "MATDATE",
+                            "COUPONPERCENT", "ACCRUEDINT", "FACEVALUE", "ISSUESIZEPLACED"],
+                "data": [
+                    ["SU26207RMFS9", "ОФЗ 26207", "ОФЗ-ПД 26207 03/02/27", "OFZ-PD 26207",
+                     "2027-02-03", 8.15, 26.13, 1000, 370200604],
+                    ["SU29016RMFS7", "ОФЗ 29016", "ОФЗ-ПК 29016", "OFZ-PK 29016",
+                     "2028-04-12", None, 38.11, 1000, 400000000],
+                    ["SU000FAKE000", "НЕ ОФЗ", "OFZ-PD", "OFZ-PD",
+                     "2030-01-01", 5.0, 0.0, 1000, 1000],      # посторонняя бумага
+                ]},
+             "marketdata": {"columns": ["SECID", "YIELD", "LAST", "LASTTOPREVPRICE", "VALTODAY_RUR"],
+                            "data": [["SU26207RMFS9", 14.07, 99.04, -0.02, 58_300_000],
+                                     ["SU29016RMFS7", 0, None, None, 0]]}}
+
+    def setUp(self):
+        # unittest гоняет методы по алфавиту: api-тесты идут раньше тестов,
+        # которые наполняют ofz_board, поэтому наполняем здесь же
+        with mock.patch.object(rates, "http_get_json", return_value=self.BOARD):
+            econ.fetch_ofz_board(now=SESSION)
+
+    def test_board_keeps_every_ofz_and_drops_the_rest(self):
+        with mock.patch.object(rates, "http_get_json", return_value=self.BOARD):
+            n = econ.fetch_ofz_board(now=SESSION)
+        self.assertEqual(n, 2)                     # посторонняя «НЕ ОФЗ» отброшена
+        with rates.get_db() as db:
+            rows = {r["secid"]: dict(r) for r in db.execute(
+                "SELECT * FROM ofz_board WHERE snap_date = (SELECT MAX(snap_date) FROM ofz_board)")}
+        pd_, pk = rows["SU26207RMFS9"], rows["SU29016RMFS7"]
+        self.assertEqual((pd_["kind"], pd_["kind_label"]), ("PD", "ОФЗ-ПД"))
+        self.assertAlmostEqual(pd_["issue_size_mlrd"], 370.2, places=1)
+        self.assertEqual(pk["yield_prc"], None)    # 0 в выдаче = «не рассчитана», а не ноль
+        self.assertEqual(pk["kind"], "PK")
+
+    def test_kind_parsing(self):
+        self.assertEqual(econ.ofz_kind("OFZ-PD 26207"), ("PD", "ОФЗ-ПД"))
+        self.assertEqual(econ.ofz_kind("ofz-in 52002"), ("IN", "ОФЗ-ИН"))
+        self.assertEqual(econ.ofz_kind(None)[0], "??")
+
+    def test_snapshot_outside_session_writes_nothing(self):
+        """Вне сессии функции не пишут вообще: иначе «сегодняшний» снимок из
+        прочерков затер бы вчерашний настоящий."""
+        with rates.get_db() as db:
+            db.execute("DELETE FROM ofz_board")
+        before = rates.app.test_client().get("/api/ofz/all").json["snap_date"]
+        early = datetime(2026, 11, 27, 7, 5, tzinfo=MSK_TZ)
+        self.assertEqual(econ.fetch_ofz_board(now=early), 0)
+        self.assertIsNone(econ.fetch_ofz_snapshot(now=early))
+        with rates.get_db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM ofz_board").fetchone()[0], 0)
+        self.assertEqual(rates.app.test_client().get("/api/ofz/all").json["snap_date"], before)
+
+    def test_snapshot_outside_session_is_skipped(self):
+        """Ночью борт отдаёт вчерашние доходности с пустой ценой — снимок-призрак
+        не должен становиться «последним днём» на фронте."""
+        self.assertFalse(econ._ofz_session_open(datetime(2026, 11, 27, 3, 0, tzinfo=MSK_TZ)))
+        self.assertFalse(econ._ofz_session_open(datetime(2026, 11, 27, 10, 29, tzinfo=MSK_TZ)))
+        self.assertTrue(econ._ofz_session_open(datetime(2026, 11, 27, 11, 0, tzinfo=MSK_TZ)))
+        self.assertFalse(econ._ofz_session_open(datetime(2026, 11, 27, 23, 30, tzinfo=MSK_TZ)))
+
+    def test_api_ofz_all_marks_basket_and_series(self):
+        body = rates.app.test_client().get("/api/ofz/all").json
+        self.assertTrue(body["snap_date"])
+        got = {r["secid"]: r for r in body["rows"]}
+        self.assertIn("SU26207RMFS9", got)
+        self.assertTrue(got["SU26207RMFS9"]["in_basket"])
+        self.assertFalse(got["SU29016RMFS7"]["in_basket"])
+        self.assertIn("PD", [k["kind"] for k in body["kinds"]])
+
+    def test_api_ofz_series_validates_secid(self):
+        c = rates.app.test_client()
+        self.assertEqual(c.get("/api/ofz/series").status_code, 400)              # пусто
+        self.assertEqual(c.get("/api/ofz/series?secid=../..").status_code, 400)  # мусор
+        self.assertEqual(c.get("/api/ofz/series?secid=SU9999NOTHERE").status_code, 404)
+
+    def test_api_ofz_series_fetches_and_caches(self):
+        """Ряд по выпуску НЕ из корзины: первый запрос качает, второй — из базы."""
+        hist = {"history": {"columns": ["TRADEDATE", "SECID", "CLOSE", "YIELDCLOSE"],
+                            "data": [["2026-11-25", "SU29016RMFS7", 101.0, 14.4],
+                                     ["2026-11-26", "SU29016RMFS7", 101.1, 14.5]]}}
+        with rates.get_db() as db:
+            db.execute("DELETE FROM econ_series WHERE key = 'bond_yld_SU29016RMFS7'")
+        c = rates.app.test_client()
+        with mock.patch.object(rates, "http_get_json", return_value=hist) as hj:
+            body = c.get("/api/ofz/series?secid=SU29016RMFS7").json
+            self.assertEqual(hj.call_count, 1)
+            self.assertEqual([p["yield"] for p in body["points"]], [14.4, 14.5])
+            self.assertEqual(body["shortname"], "ОФЗ 29016")
+            again = c.get("/api/ofz/series?secid=SU29016RMFS7").json
+            self.assertEqual(hj.call_count, 1)      # второй раз — кеш, биржу не трогали
+            self.assertEqual(len(again["points"]), 2)
+
 
 class TestProkatRosstat(unittest.TestCase):
     """Парсер файла «Средние цены производителей на отдельные виды

@@ -10,9 +10,10 @@
 #      крупнейших банков (regulatory_rates.xlsx, лист «в рублях»). Месячные
 #      срезы по бакетам сроков; недельного разреза 3–6 мес в открытом
 #      файле нет — честная замена привычной «средней максимальной».
-#   3. Кривая ОФЗ — ММВБ ISS, борт TQOB («Т+: Гособлигации»): дневной
-#      снимок доходностей фиксированной корзины выпусков + подтягивание
-#      истории YIELDCLOSE по каждому.
+#   3. Рынок ОФЗ — ММВБ ISS, борт TQOB («Т+: Гособлигации»): дневной снимок
+#      фиксированной корзины (кривая), СНИМОК ВСЕГО БОРТА в ofz_board
+#      (живая таблица: новые выпуски появляются сами) и подтягивание
+#      истории YIELDCLOSE — по корзине всегда, по остальным — по запросу.
 #   4. Реальный сектор (автомат) — Росстат ССРД/SDDS: ИПП (месяц,
 #      2023=100), уровень безработицы (месяц, %) и номинальная зарплата
 #      (месяц, ₽); реальные располагаемые доходы — кварталом из ротационного
@@ -54,6 +55,21 @@ def configure(get_db, fetch_json, moex_rewrite):
     _conn = get_db
     _http_json = fetch_json
     _moex = moex_rewrite
+
+
+# Москва живёт без перехода на летнее время, поэтому фиксированный +3
+# достаточен: контейнер — в UTC, а даты торгов и «сегодняшний снимок» — по MSK.
+MSK = timezone(timedelta(hours=3))
+# секция «Т+: Гособлигации» открыта с ~10:00 МСК; до неё LAST пустой, а оборот
+# дня обнулён, и «сегодняшний» снимок получился бы из прочерков
+OFZ_SESSION_OPEN = (10, 30)
+OFZ_SESSION_CLOSE = (23, 30)
+
+
+def _ofz_session_open(now=None) -> bool:
+    """Писать биржевой снимок имеет смысл только внутри торговой сессии."""
+    now = now or datetime.now(MSK)
+    return OFZ_SESSION_OPEN <= (now.hour, now.minute) < OFZ_SESSION_CLOSE
 
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -136,7 +152,7 @@ ECON_SERIES = {
 }
 
 # Корзина ОФЗ: постоянный купон (ОФЗ-ПД), погашение 2027–2041, примерно по
-# выпуску на каждые полтора года. Из 33 подходящих ПД на борта TQOB взято 12 —
+# выпуску на каждые полтора года. Из 34 подходящих ПД на борту TQOB взято 13 —
 # состав зафиксирован именно здесь, а не собирается по обороту дня: иначе
 # менялся бы сам ряд и история доходностей стала бы несравнимой.
 # Обороты взятых выпусков 30–1800 млн ₽/день (снято 26.11.2026) — у 26235 и
@@ -473,19 +489,22 @@ HISTORY_URL = ("http://iss.moex.com/iss/history/engines/stock/markets/bonds/boar
                "securities/{secid}.json")
 
 
-def fetch_ofz_history(days: int = 400):
+def fetch_ofz_history(days: int = 400, secids=None):
     """
-    YIELDCLOSE по корзине за последние N дней. MOEX режет выдачу истории
-    по 100 строк, поэтому идём страницами через start=… (идемпотентно:
-    INSERT OR REPLACE по (key, period)).
+    YIELDCLOSE за последние N дней. По умолчанию — по корзине; secids можно
+    передать явно: так работает «добавить на график любой выпуск» (фронт просит
+    ряд ровно по тому SECID, который показали в живой таблице борта).
+    MOEX режет выдачу истории по 100 строк, поэтому идём страницами через
+    start=… (идемпотентно: INSERT OR REPLACE по (key, period)).
     """
     if _http_json is None:
         return 0
     till = date.today().isoformat()
     from_ = (date.today() - timedelta(days=days)).isoformat()
     n = 0
+    targets = [(secid, None, None) for secid in secids] if secids else OFZ_UNIVERSE
     with _conn() as db:
-        for secid, _shortname, _matdate in OFZ_UNIVERSE:
+        for secid, _shortname, _matdate in targets:
             start = 0
             while True:
                 data = _http_json(
@@ -513,11 +532,108 @@ def fetch_ofz_history(days: int = 400):
     return n
 
 
-def fetch_ofz_snapshot():
+# Тип выпуска по латинскому имени с борта (OFZ-PD → «ОФЗ-ПД»). Разница не
+# косметическая: у ПК купон ползёт за ставкой overnight, у ИН — за инфляцией,
+# у АД доходом служит график погашения тела. Биржа по ним YIELD либо не
+# считает (0 в выдаче), либо считает по своей методике — поэтому на кривой их
+# нет, а в таблице они есть, с прочерком вместо доходности.
+OFZ_KINDS = {
+    "PD": ("ОФЗ-ПД", "постоянный купон — единственные, чья доходность к погашению "
+                     "описывает именно срок; из них собрана кривая"),
+    "PK": ("ОФЗ-ПК", "купон индексируется к ставке рынка overnight: доходность зависит "
+                     "от будущих решений ЦБ, биржа её не рассчитывает"),
+    "IN": ("ОФЗ-ИН", "купон и тело индексируются к инфляции; доходность — реальная, "
+                     "не номинальная, с ПД на одной оси не сравнивается"),
+    "AD": ("ОФЗ-АД", "с амортиционным доходом: погашение тела частями, старый выпуск, "
+                     "торгуется вяло"),
+    "??": ("ОФЗ",   "тип по латинскому имени не определился — оставляем как есть"),
+}
+
+
+def ofz_kind(latname):
+    """'OFZ-PD 26207' → ('PD', 'ОФЗ-ПД')."""
+    m = re.match(r"^OFZ-([A-Z]{2})", (latname or "").upper())
+    kind = m.group(1) if m else "??"
+    return kind, OFZ_KINDS.get(kind, OFZ_KINDS["??"])[0]
+
+
+def fetch_ofz_board(now=None):
+    """
+    ВСЕ выпуски ОФЗ с борта TQOB — дневной срез в ofz_board.
+
+    Это ответ на «как сделать, чтобы появлялись новые выпуски»: никак. Строка
+    этой таблицы = строка борда, поэтому новый выпуск Минфина возникает в
+    интерфейсе сам, в тот же день, без правки кода. Фиксированная корзина
+    (OFZ_UNIVERSE) для этого не нужна — она осталась только там, где постоянство
+    состав действительно защищает: кривая и наклон.
+
+    Вне торговой сессии выходим, не трогая таблицу: борт в 7 утра отдаёт
+    вчерашние доходности с пустой ценой и нулевым оборотом, и такой «сегодняшний
+    снимок» затер бы вчерашний честный. now — для тестов.
+    """
+    now = now or datetime.now(MSK)
+    if not _ofz_session_open(now):
+        print("[econ/ofz] сессия закрыта: снимок борта не пишем, оставляем "
+              "последний настоящий день")
+        return 0
+    if _http_json is None:
+        return 0
+    data = _http_json(_moex(BOARDS_URL), params={
+        "iss.meta": "off", "iss.only": "securities,marketdata",
+        "securities.columns": "SECID,SHORTNAME,SECNAME,LATNAME,MATDATE,COUPONPERCENT,"
+                              "ACCRUEDINT,FACEVALUE,ISSUESIZEPLACED",
+        "marketdata.columns": "SECID,YIELD,LAST,LASTTOPREVPRICE,VALTODAY_RUR"})
+    sc = data["securities"]["columns"]
+    md_cols = data["marketdata"]["columns"]
+    md = {row[0]: row for row in data["marketdata"]["data"]}
+
+    def cell(row, col):
+        v = row[sc.index(col)] if row and col in sc else None
+        return v if isinstance(v, (int, float)) else (None if v in ("", None) else str(v))
+
+    def num(row, col):
+        i = md_cols.index(col)
+        v = row[i] if row and i < len(row) else None
+        return float(v) if isinstance(v, (int, float)) else None
+
+    today = now.strftime("%Y-%m-%d")
+    rows = []
+    for r in data["securities"]["data"]:
+        secid = r[sc.index("SECID")]
+        name = r[sc.index("SECNAME")] or ""
+        if not name.startswith("ОФЗ"):
+            continue                     # на борту есть и корпоративные бумаги
+        kind, kind_label = ofz_kind(r[sc.index("LATNAME")])
+        mdr = md.get(secid)
+        face = cell(r, "FACEVALUE")
+        placed = cell(r, "ISSUESIZEPLACED")
+        size_mlrd = (placed * face / 1e9) if (placed and face) else None
+        yld = num(mdr, "YIELD")
+        rows.append((today, secid, r[sc.index("SHORTNAME")] or name, kind, kind_label,
+                     r[sc.index("MATDATE")] or "", yld if yld else None,
+                     num(mdr, "LAST"), num(mdr, "LASTTOPREVPRICE"),
+                     cell(r, "COUPONPERCENT"), cell(r, "ACCRUEDINT"),
+                     size_mlrd, num(mdr, "VALTODAY_RUR")))
+    with _conn() as db:
+        db.executemany(
+            "INSERT OR REPLACE INTO ofz_board (snap_date, secid, shortname, kind, kind_label,"
+            " matdate, yield_prc, price_prc, price_chg_prc, coupon_prc, accrued,"
+            " issue_size_mlrd, valtoday_rur) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    print(f"[econ/ofz] борт целиком: {len(rows)} выпусков на {today}")
+    return len(rows)
+
+
+def fetch_ofz_snapshot(now=None):
     """
     Дневной срез кривой из live-борда TQOB: доходность, цена (LAST, % от
     номинала), изменение к предыдущему дню, НКД и дневной оборот.
+
+    Охранение по сессии — как у снимка борта: до 10:30 МСК писать нечего.
     """
+    now = now or datetime.now(MSK)
+    if not _ofz_session_open(now):
+        print("[econ/ofz] сессия закрыта: снимок кривой не пишем")
+        return None
     if _http_json is None:
         return None
     data = _http_json(_moex(BOARDS_URL), params={
@@ -533,7 +649,7 @@ def fetch_ofz_snapshot():
         v = row[cols.index(name)]
         return float(v) if isinstance(v, (int, float)) else None
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now.strftime("%Y-%m-%d")
     rows = []
     for secid, shortname, matdate in OFZ_UNIVERSE:
         if secid not in md:
@@ -1206,6 +1322,25 @@ def init_econ_db():
                 db.execute(f"ALTER TABLE ofz_snapshot ADD COLUMN {col} REAL")
         db.execute(
             """
+            CREATE TABLE IF NOT EXISTS ofz_board (
+                snap_date TEXT NOT NULL,
+                secid     TEXT NOT NULL,
+                shortname TEXT NOT NULL,
+                kind      TEXT NOT NULL,       -- PD | PK | IN | AD | ??
+                kind_label TEXT NOT NULL,      -- ОФЗ-ПД и т.д.
+                matdate   TEXT,
+                yield_prc REAL,                -- NULL: биржа не считает (ПК) или не было торгов
+                price_prc REAL,
+                price_chg_prc REAL,
+                coupon_prc REAL,
+                accrued   REAL,
+                issue_size_mlrd REAL,          -- размещено × номинал, млрд ₽
+                valtoday_rur REAL,             -- оборот дня, ₽ (0 до начала сессии)
+                PRIMARY KEY (snap_date, secid)
+            )
+            """)
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS ofz_info (
                 secid       TEXT PRIMARY KEY,
                 shortname   TEXT NOT NULL,
@@ -1278,6 +1413,7 @@ def register_jobs(scheduler):
     def job_ofz():
         try:
             fetch_ofz_snapshot()
+            fetch_ofz_board()
             fetch_ofz_history(days=5)
             # дата выпуска и купон не меняются — обновляем раз в месяц для
             # случая, когда в корзину добавим новый выпуск
@@ -1310,7 +1446,10 @@ def register_jobs(scheduler):
     scheduler.add_job(job_prokat, "interval", hours=24, id="econ_prokat")
     scheduler.add_job(job_rates, "interval", hours=12, id="econ_rates")
     scheduler.add_job(job_real, "interval", hours=24, id="econ_real")
-    scheduler.add_job(job_ofz, "interval", hours=12, id="econ_ofz")
+    # 2 часа, а не 12: снимок борта пишется только внутри сессии (охранение
+    # внутри fetch_*), и редкий прогон означал бы, что таблица «Все ОФЗ»
+    # дожидалась бы нового дня до вечера
+    scheduler.add_job(job_ofz, "interval", hours=2, id="econ_ofz")
     scheduler.add_job(job_metals, "interval", hours=6, id="econ_metals")
 
 
@@ -1344,6 +1483,15 @@ def econ_seed():
         fetch_ofz_snapshot()
     except Exception as e:
         print(f"[econ/seed] ofz snapshot: {e}")
+    with _conn() as db:
+        fresh_board = db.execute(
+            "SELECT COUNT(*) FROM ofz_board WHERE snap_date = ?",
+            (date.today().isoformat(),)).fetchone()[0]
+    if not fresh_board:
+        try:
+            fetch_ofz_board()
+        except Exception as e:
+            print(f"[econ/seed] ofz board: {e}")
     if need_info:
         try:
             fetch_ofz_info()

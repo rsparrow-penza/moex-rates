@@ -1015,6 +1015,11 @@ td.cell-min { color: #69db7c; font-weight: 700; }
 }
 
 /* чипы-переключатели рядов ставок */
+/* живая таблица шире карточки: восемь колонок + метки — лучше скролл,
+   чем отрезанная колонка «оборот» без всякого знака, что она не влезла */
+.ec-scroll { overflow-x: auto; }
+.ec-scroll .ec-table { min-width: 720px; }
+
 .ec-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 
 .ec-chip {
@@ -1090,6 +1095,9 @@ td.cell-min { color: #69db7c; font-weight: 700; }
   white-space: nowrap;
 }
 .ec-badge.soon { color: #ffd43b; border-color: #6b5d20; }
+/* метки принадлежности: в корзине / на графике — не украшение, а состояние */
+.ec-badge.soon2 { color: #a5b4fc; border-color: #3c4a7a; }
+.ec-badge.on2 { color: #69db7c; border-color: #2f6b3f; }
 .ec-badge.off { color: #86869a; }
 .ec-chip.off { opacity: 0.5; }
 

@@ -1153,6 +1153,96 @@ def econ_bonds():
                     "series": series})
 
 
+@app.route("/api/ofz/all", methods=["GET"])
+def ofz_all():
+    """
+    GET /api/ofz/all — все выпуски ОФЗ с борта TQOB (дневной срез ofz_board).
+
+    Таблица живая: строка = строка биржевого борта, поэтому новые выпуски
+    Минфина появляются сами и ничего не надо править в коде. Прошлый снимок
+    остаётся, пока не будет нового, — фронт всегда видит корректную дату.
+
+    В ответе есть flags: какие выпуски входят в фиксированную корзину кривой
+    (in_basket) и есть ли уже подтянутая история доходности (has_series) —
+    по клику фронт дёргает /api/ofz/series только когда истории нет.
+    """
+    with get_db() as db:
+        day = db.execute("SELECT MAX(snap_date) AS d FROM ofz_board").fetchone()["d"]
+        rows = db.execute(
+            "SELECT * FROM ofz_board WHERE snap_date = ?"
+            " ORDER BY matdate, kind, shortname", (day,)).fetchall() if day else []
+        have = {r["key"][len("bond_yld_"):]
+                for r in db.execute("SELECT DISTINCT key FROM econ_series WHERE key LIKE 'bond_yld_%'")}
+    basket = {secid for secid, _n, _m in econ.OFZ_UNIVERSE}
+    retired = set(econ.OFZ_LINEAGE)
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["in_basket"] = d["secid"] in basket
+        d["retired"] = d["secid"] in retired and not d["in_basket"]
+        d["has_series"] = d["secid"] in have
+        out.append(d)
+    kinds = {}
+    for d in out:
+        k = kinds.setdefault(d["kind"], {"kind": d["kind"], "label": d["kind_label"], "n": 0})
+        k["n"] += 1
+    return jsonify({"snap_date": day, "rows": out,
+                    "kinds": sorted(kinds.values(), key=lambda k: k["kind"]),
+                    "notes": {v[0]: v[1] for v in econ.OFZ_KINDS.values()}})
+
+
+@app.route("/api/ofz/series", methods=["GET"])
+def ofz_series():
+    """
+    GET /api/ofz/series?secid=SU26232RMFS7&days=400
+    Дневной ряд YIELDCLOSE по ЛЮБОМУ выпуску с борта — чтобы добавить его на
+    график, не дожидаясь, пока он попадёт в корзину.
+
+    Ряд кладётся в ту же econ_series (ключ bond_yld_<secid>) и дальше
+    обновляется общим дневным прогоном только если выпуск в корзине; для
+    «разовых» выпусков мы добираем его при повторном клике, если данные
+    старше трёх дней. SECID проверяем по борту: запрос произвольной строки не
+    должен превращаться в прокси к ММВБ.
+    """
+    secid = (request.args.get("secid") or "").strip().upper()
+    try:
+        days = min(max(int(request.args.get("days") or 400), 5), 2000)
+    except ValueError:
+        return jsonify({"error": "days — целое число дней"}), 400
+    if not re.fullmatch(r"[A-Z0-9]{6,20}", secid):
+        return jsonify({"error": "некорректный secid"}), 400
+    with get_db() as db:
+        known = db.execute(
+            "SELECT 1 FROM ofz_board WHERE secid = ?"
+            " UNION SELECT 1 FROM ofz_snapshot WHERE secid = ? LIMIT 1",
+            (secid, secid)).fetchone()
+        if not known:
+            return jsonify({"error": f"выпуск {secid} не найден на борту TQOB"}), 404
+        last = db.execute(
+            "SELECT MAX(period) AS p, COUNT(*) AS n FROM econ_series WHERE key = ?",
+            (f"bond_yld_{secid}",)).fetchone()
+    stale = (not last["n"]) or (
+        (datetime.now(MSK).date() - datetime.strptime(last["p"], "%Y-%m-%d").date()).days > 3)
+    if stale:
+        try:
+            econ.fetch_ofz_history(days=days, secids=[secid])
+        except Exception as e:
+            if not last["n"]:
+                return jsonify({"error": f"история не подтянута: {e}"}), 502
+            app.logger.info("ofz series: %s не обновилась (%s), отдаём кеш", secid, e)
+    with get_db() as db:
+        head = db.execute("SELECT shortname, matdate FROM ofz_board WHERE secid = ?"
+                          " ORDER BY snap_date DESC LIMIT 1", (secid,)).fetchone()
+        pts = db.execute(
+            "SELECT period, value FROM econ_series WHERE key = ? ORDER BY period",
+            (f"bond_yld_{secid}",)).fetchall()
+    return jsonify({"secid": secid,
+                    "shortname": head["shortname"] if head else secid,
+                    "matdate": head["matdate"] if head else None,
+                    "updated": last["p"],
+                    "points": [{"date": p["period"], "yield": p["value"]} for p in pts]})
+
+
 @app.route("/api/budget", methods=["GET"])
 def budget_get():
     """
