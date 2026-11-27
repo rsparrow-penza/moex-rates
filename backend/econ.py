@@ -1449,7 +1449,10 @@ def register_jobs(scheduler):
     # 2 часа, а не 12: снимок борта пишется только внутри сессии (охранение
     # внутри fetch_*), и редкий прогон означал бы, что таблица «Все ОФЗ»
     # дожидалась бы нового дня до вечера
-    scheduler.add_job(job_ofz, "interval", hours=2, id="econ_ofz")
+    # next_run_time: без него после каждого рестарта контейнера ряды доходностей
+    # отставали на два часа (боя не было, а следующий прогон ещё не наступил)
+    scheduler.add_job(job_ofz, "interval", hours=2, id="econ_ofz",
+                      next_run_time=datetime.now())
     scheduler.add_job(job_metals, "interval", hours=6, id="econ_metals")
 
 
@@ -1464,7 +1467,13 @@ def econ_seed():
         def has(sql):
             return db.execute(sql).fetchone()[0]
 
-        need_bonds = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'bond_yld_%'")
+        # ряда нет хотя бы у одного выпуска корзины → докачиваем именно его:
+        # иначе добавленный в OFZ_UNIVERSE выпуск живёт пятью точками, пока
+        # кто-нибудь не вспомнит запустить бэкаф руками (так было с 26232)
+        bonded = {r["key"] for r in db.execute(
+            "SELECT DISTINCT key FROM econ_series WHERE key LIKE 'bond_yld_%'")}
+        missing_bonds = [secid for secid, _n, _m in OFZ_UNIVERSE
+                         if f"bond_yld_{secid}" not in bonded]
         need_info = not has("SELECT COUNT(*) FROM ofz_info")
         need_rates = not has("SELECT COUNT(*) FROM econ_series WHERE key LIKE 'rate_%'")
         need_real = not has("SELECT COUNT(*) FROM econ_series WHERE key IN ('ippe_idx','unemp_rate')")
@@ -1474,9 +1483,9 @@ def econ_seed():
         # по одному ключу на площадку с металла: недобрало — значит добавили новый металл
         need_metals = metal_keys < 2 * len(METALS)
 
-    if need_bonds:
+    if missing_bonds:
         try:
-            fetch_ofz_history(days=400)
+            fetch_ofz_history(days=400, secids=missing_bonds)
         except Exception as e:
             print(f"[econ/seed] ofz history: {e}")
     try:

@@ -524,6 +524,63 @@ class TestOfzBoard(unittest.TestCase):
             self.assertEqual(len(again["points"]), 2)
 
 
+class TestEconSeed(unittest.TestCase):
+    """Сид не должен превращаться в «качаем всё заново» и должен догонять
+    именно недостающее — иначе новый выпуск корзины живёт пятью точками."""
+
+    NAMES = ("fetch_ofz_history", "fetch_ofz_snapshot", "fetch_ofz_info",
+             "fetch_cbr_rates", "fetch_rosstat_real", "fetch_metals",
+             "fetch_prokat", "fetch_prokat_dealer")
+
+    def tearDown(self):
+        # эти тесты наполняют econ_series строками рядов; база у модуля общая,
+        # и соседний тест постраничности иначе насчитает на одну строку больше
+        with rates.get_db() as db:
+            db.execute("DELETE FROM econ_series WHERE key LIKE 'bond_yld_%'")
+
+    def _seed(self, **overrides):
+        patches = {n: mock.Mock(return_value=0) for n in self.NAMES}
+        patches.update(overrides)
+        with mock.patch.multiple(econ, **patches):
+            econ.econ_seed()
+        return patches
+
+    def _fill_series(self, secids):
+        with rates.get_db() as db:
+            for secid in secids:
+                db.execute("INSERT OR REPLACE INTO econ_series VALUES (?, ?, ?)",
+                           (f"bond_yld_{secid}", "2026-11-25", 15.0))
+
+    def test_backfills_only_the_missing_issue(self):
+        econ.init_econ_db()
+        with rates.get_db() as db:
+            db.execute("DELETE FROM econ_series WHERE key LIKE 'bond_yld_%'")
+        self._fill_series([s for s, _n, _m in econ.OFZ_UNIVERSE][:-1])
+        gone = econ.OFZ_UNIVERSE[-1][0]
+        jobs = self._seed()
+        called = jobs["fetch_ofz_history"].call_args
+        self.assertEqual(called.kwargs["secids"], [gone])   # качаем не всю корзину
+        self.assertEqual(called.kwargs["days"], 400)
+
+    def test_skips_when_every_issue_has_a_series(self):
+        econ.init_econ_db()
+        with rates.get_db() as db:
+            db.execute("DELETE FROM econ_series WHERE key LIKE 'bond_yld_%'")
+        self._fill_series([s for s, _n, _m in econ.OFZ_UNIVERSE])
+        jobs = self._seed()
+        jobs["fetch_ofz_history"].assert_not_called()
+
+    def test_ofz_job_starts_immediately(self):
+        """Иначе после каждого рестарта контейнера ряды отставали бы на 2 часа."""
+        sched = mock.Mock()
+        econ.register_jobs(sched)
+        ofz = [c for c in sched.add_job.call_args_list
+               if c.kwargs.get("id") == "econ_ofz"]
+        self.assertEqual(len(ofz), 1)
+        self.assertEqual(ofz[0].kwargs["hours"], 2)
+        self.assertIsNotNone(ofz[0].kwargs.get("next_run_time"))
+
+
 class TestProkatRosstat(unittest.TestCase):
     """Парсер файла «Средние цены производителей на отдельные виды
     промышленных товаров»: три разных разметки листов в одном файле."""
