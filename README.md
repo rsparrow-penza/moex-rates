@@ -325,7 +325,7 @@ python3 -m unittest discover -v
 ## Продакшен (Timeweb VPS)
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --force-recreate
 # сайт: http://<IP>:8080
 ```
 
@@ -335,6 +335,9 @@ docker compose up -d --build
 стартовый seed, — `python scheduler.py`; оба сервиса используют общий volume
 `rates-data`. Увеличение числа web-worker'ов или replicas backend не умножает
 запросы к ЦБ, ММВБ, Yahoo и Росстату.
+`--force-recreate` нужен при пересборке backend: nginx во frontend резолвит
+Docker-имя backend при старте, поэтому так он гарантированно получает новый
+внутренний IP после пересоздания контейнера.
 
 Ключевые настройки бэкенда (переменные окружения контейнера):
 
