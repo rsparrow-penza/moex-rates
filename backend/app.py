@@ -1243,6 +1243,60 @@ def ofz_series():
                     "points": [{"date": p["period"], "yield": p["value"]} for p in pts]})
 
 
+@app.route("/api/penza", methods=["GET"])
+def penza():
+    """
+    GET /api/penza — Пензенская область из федеральных выгрузок Росстата.
+
+    Пять сюжетов: инфляция (мес., %), потребительские цены по 18 позициям
+    (мес., ₽ за единицу), жильё (квартал, ₽/м²), доходы (квартал) и индекс
+    выпуска (мес., % г/г). Географии подписаны явно: pz — область, pzc — город
+    Пенза, rf — Россия, pfo — Приволжский ФО; сравнение всегда в той же базе,
+    что и ряд региона.
+
+    meta отвечает на «откуда и с какого числа»: имена файлов и последний
+    период. Часть позиций по городу закрыта прочерками в самом файле — они
+    приходят как отсутствие точки, а не как ноль.
+    """
+    def load(key):
+        rows = db.execute(
+            "SELECT period, value FROM econ_series WHERE key = ? ORDER BY period",
+            (key,)).fetchall()
+        return [{"period": r["period"], "value": r["value"]} for r in rows]
+
+    with get_db() as db:
+        meta = {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM penza_meta")}
+        # ключ ряда в базе — geo_cpi_{what}_{mom|yoy}; наружу отдаём короткий
+        # geo_what, но читаем базовый: перепутали один раз и получили пустые
+        # плитки «за месяц» при полных данных в базе
+        CPI_WHATS = (("yoy", "ИПЦ, % к тому же месяцу год назад", "% г/г", "cpi_yoy"),
+                     ("mom", "ИПЦ, % к предыдущему месяцу", "% / мес", "cpi_mom"),
+                     ("food_mom", "Продовольственные товары, % к предыдущему месяцу",
+                      "% / мес", "food_mom"),
+                     ("nonfood_mom", "Непродовольственные товары, % к предыдущему месяцу",
+                      "% / мес", "nonfood_mom"),
+                     ("services_mom", "Услуги, % к предыдущему месяцу", "% / мес", "services_mom"))
+        cpi = [{"key": f"{geo}_{what}", "label": f"{gl} · {label}", "unit": unit,
+                "series": load(f"{geo}_{base}")}
+               for geo, gl in (("region", "Пензенская область"), ("pfo", "Приволжский ФО"),
+                               ("rf", "Россия"))
+               for what, label, unit, base in CPI_WHATS]
+        goods = [dict(g, region=load(f"pzg_{g['key']}"), city=load(f"pzc_{g['key']}"),
+                      rf=load(f"rfg_{g['key']}")) for g in econ.PENZA_GOODS]
+        flat = [dict(kind=k, label=lbl, region=load(f"region_flat_{k}"),
+                     city=load(f"city_flat_{k}"), rf=load(f"rf_flat_{k}"))
+                for k, lbl in (("perv", "Первичка"), ("vtor", "Вторичка"))]
+        income = [dict(kind="sdd", label="Среднедушевой доход, ₽/мес", unit="₽",
+                       region=load("region_income_sdd"), rf=load("rf_income_sdd")),
+                  dict(kind="rdd", label="Реальные доходы, % г/г", unit="% г/г",
+                       region=load("region_income_rdd"), rf=load("rf_income_rdd"))]
+        output = [dict(geo=g, label=l, series=load(f"{g}_output_yoy"))
+                  for g, l in (("region", "Пензенская область"), ("pfo", "Приволжский ФО"))]
+    return jsonify({"meta": meta, "cpi": cpi, "goods": goods, "flat": flat,
+                    "income": income, "output": output,
+                    "as_of": meta.get("as_of"), "region": "Пензенская область"})
+
+
 @app.route("/api/budget", methods=["GET"])
 def budget_get():
     """

@@ -1290,6 +1290,519 @@ def fetch_prokat_dealer(force: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Пензенская область: региональные срезы Росстата
+# ---------------------------------------------------------------------------
+#
+# Почему не с сайта Пензастата: 58.rosstat.gov.ru резолвится в 194.226.89.60,
+# но TCP молчит и на 80, и на 443 — и с локальной машины, и с VPS (nc тоже);
+# старый pensastat.gks.ru не резолвится вовсе. Проверено 27.11.2026.
+# Территориальный орган сдаёт те же наблюдения в Росстат, а Росстат публикует их
+# файлами по субъектам — это тот же первоисточник, только со стороны федеральной
+# выгрузки, и он у нас открывается.
+#
+# Глубина рядов: ИПЦ по субъектам — лист на каждый месяц с 01(2022);
+# потребительские цены — лист на каждый месяц текущего года (и 2025 отдельным
+# файлом); среднедушевые доходы — с 2011, реальные — с 2014; цены на жильё —
+# файл за каждый год.
+#
+# Чего здесь сознательно нет: месячных зарплаты и безработицы по субъектам —
+# они лежат на fedstat/ЕМИСС, а оттуда нам 403 (проверено с двух адресов).
+# Вместо них квартальные доходы: тот же сюжет, но данными, которые мы можем
+# открыть. Часть позиций по городу Пензе закрыта «…» (например, бензин) — это
+# прочерк, а не ноль.
+#
+# Имена файлов ротируются по месяцам и кварталам, архива ссылок на странице нет,
+# поэтому имя сначала ищем в выдаче раздела (берём самое свежее по (год, номер)),
+# и только потом качаем — та же схема, что с Proizvoditeli_Cena_* и urov_12kv_*.
+
+ROSSTAT_PAGES = {
+    "price": "https://www.rosstat.gov.ru/statistics/price",
+    "accounts": "https://www.rosstat.gov.ru/statistics/accounts",
+    "income": "https://www.rosstat.gov.ru/folder/13397",
+}
+ROSSTAT_BASE = "https://www.rosstat.gov.ru/storage/mediabank/"
+
+# rx — маска имени на странице раздела; tmpl — тем же файловым именем, но
+# собранным вручную, если страница не отдалась; step — чем меряется свежесть.
+PENZA_FILES = {
+    "cpi": dict(page="price", step="month",
+                rx=r"ipc_RF_fo_sub_(\d{2})-(\d{4})\.xlsx",
+                tmpl="ipc_RF_fo_sub_{mm}-{yyyy}.xlsx"),
+    "goods": dict(page="price", step="month",
+                  rx=r"sred_potreb_cen_(\d{2})-(\d{4})\.xlsx",
+                  tmpl="sred_potreb_cen_{mm}-{yyyy}.xlsx"),
+    "output": dict(page="accounts", step="month",
+                   rx=r"IVBO_sub_RF_(\d{2})-(\d{4})\.xlsx",
+                   tmpl="IVBO_sub_RF_{mm}-{yyyy}.xlsx"),
+    # жилья как раздела нет: ссылки на файлы цен на жильё висят в «Ценах»,
+    # а на «Жилищных условиях» их не было ни одной (проверено)
+    "flat_perv": dict(page="price", step="quarter",
+                      rx=r"sred_cen_perv_(\d+)kv-(\d{4})\.xlsx",
+                      tmpl="sred_cen_perv_{q}kv-{yyyy}.xlsx"),
+    "flat_vtor": dict(page="price", step="quarter",
+                      rx=r"sred_cen_vtor_(\d+)kv-(\d{4})\.xlsx",
+                      tmpl="sred_cen_vtor_{q}kv-{yyyy}.xlsx"),
+    "sdd": dict(page="income", step="quarter",
+                rx=r"urov_10subg_(\d+)kv(\d{4})_yt\.xlsx",
+                tmpl="urov_10subg_{q}kv{yyyy}_yt.xlsx"),
+    "rdd": dict(page="income", step="quarter",
+                rx=r"urov_11subg_(\d+)kv(\d{4})_yt\.xlsx",
+                tmpl="urov_11subg_{q}kv{yyyy}_yt.xlsx"),
+}
+
+# Коды территорий отличаются между файлами: в ИПЦ укороченные (8 знаков), в
+# ценах и жилье — полные ОКАТО. Город Пенза в областных файлах идёт отдельной
+# строкой сразу за областью, и значения там свои.
+PENZA_TERRITORIES = {
+    "cpi": dict(region="56000000", pfo="33", rf="643"),
+    "goods": dict(region="56000000000", city="56401000000", rf="643"),
+    "flat": dict(region="56000000000", rf="643"),
+    "output": dict(region="Пензенская область", pfo="Приволжский федеральный округ"),
+    "income": dict(region="Пензенская область", rf="Российская Федерация"),
+}
+
+# Позиции потребительского мониторинга берём по коду, а не по названию: название
+# в файле могут перепечатать, код позиции стабилен между месяцами и годами.
+# ВНИМАНИЕ: месячный файл содержит листы только текущего года, а годового
+# архива по субъектам Росстат не отдаёт (sred_potreb_cen_1991-2025.xlsx — это
+# средние по России, строк региона в нём нет). Значит, ряд цен по Пензе растёт
+# только с момента подключения блока — на фронте это подписано, а не скрыто.
+PENZA_GOODS = [
+    dict(code="111", key="beef", label="Говядина", unit="кг"),
+    dict(code="114", key="chicken", label="Куры", unit="кг"),
+    dict(code="701", key="butter", label="Масло сливочное", unit="кг"),
+    dict(code="1204", key="cheese", label="Сыры", unit="кг"),
+    dict(code="1111", key="milk", label="Молоко 2,5–3,2 %", unit="л"),
+    dict(code="1501", key="eggs", label="Яйца", unit="10 шт."),
+    dict(code="1601", key="sugar", label="Сахар", unit="кг"),
+    dict(code="2101", key="flour", label="Мука", unit="кг"),
+    dict(code="2201", key="bread", label="Хлеб ржаной", unit="кг"),
+    dict(code="2501", key="potato", label="Картофель", unit="кг"),
+    dict(code="2601", key="cabbage", label="Капуста", unit="кг"),
+    dict(code="2623", key="tomato", label="Помидоры", unit="кг"),
+    dict(code="2701", key="apple", label="Яблоки", unit="кг"),
+    dict(code="2711", key="banana", label="Бананы", unit="кг"),
+    dict(code="7803", key="ai95", label="Бензин АИ-95", unit="л"),
+    dict(code="9461", key="gas", label="Газ сетевой", unit="м³"),
+    dict(code="9473", key="power", label="Электроэнергия", unit="мес на чел."),
+    dict(code="3306", key="water", label="Вода питьевая", unit="л"),
+]
+PENZA_GOODS_BY_CODE = {g["code"]: g for g in PENZA_GOODS}
+
+# три географии → префикс ключа ряда
+PENZA_GEO_PREFIX = dict(region="pzg", city="pzc", rf="rfg")
+
+_page_cache = {}
+
+
+def _rosstat_page(page_key):
+    """Страница раздела — один раз за прогон: она весит ~800 КБ."""
+    url = ROSSTAT_PAGES[page_key]
+    if url not in _page_cache:
+        _page_cache[url] = http_bytes(url, timeout=60).decode("utf-8", "replace")
+    return _page_cache[url]
+
+
+def _freshness(groups):
+    """
+    Группы маски имени → (год, номер) для сравнения свежести. Год — единственная
+    группа из четырёх цифр, остальное считается номером месяца/квартала, поэтому
+    порядок групп в маске не важен.
+    """
+    year = next(int(g) for g in groups if len(g) == 4)
+    num = next((int(g) for g in groups if len(g) != 4), 0)
+    return year, num
+
+
+def _penza_candidates(spec):
+    """Имена по шаблону, от самого свежего назад — на случай, если страница не отдалась."""
+    out, today = [], date.today()
+    if spec["step"] == "month":
+        y, m = today.year, today.month
+        for _ in range(14):
+            out.append(spec["tmpl"].format(mm=f"{m:02d}", yyyy=y))
+            m -= 1
+            if m == 0:
+                y, m = y - 1, 12
+    else:
+        y, q = today.year, (today.month - 1) // 3 + 1
+        for _ in range(8):
+            out.append(spec["tmpl"].format(q=q, yyyy=y))
+            q -= 1
+            if q == 0:
+                y, q = y - 1, 4
+    return out
+
+
+def _penza_names(kind):
+    """Имена подходящих файлов раздела, от самого свежего к старым (без повторов)."""
+    spec = PENZA_FILES[kind]
+    rx = re.compile(spec["rx"] + r"$")
+    found = []
+    try:
+        page = _rosstat_page(spec["page"])
+    except requests.RequestException as e:
+        print(f"[пенза] раздел {spec['page']} недоступен ({e}), перебираем имена по шаблону")
+        page = ""
+    if page:
+        for m in re.finditer(r'href="/storage/mediabank/([^"]+)"', page):
+            mm = rx.match(m.group(1))
+            if mm:
+                found.append((_freshness(mm.groups()), m.group(1)))
+        if found:
+            return [n for _k, n in sorted(set(found), key=lambda t: t[0], reverse=True)]
+    return _penza_candidates(spec)
+
+
+def resolve_penza_file(kind):
+    """
+    → (содержимое, имя) самого свежего реально скачиваемого файла.
+
+    «Свежего» ≠ «первого в списке»: ссылки на прошлые годы на странице висят,
+    но отдают 404 — проверено на всех квартальных файлах жилья. Поэтому берём
+    первый файл, который действительно пришёл и похож на XLSX. Глубина ряда при
+    этом растёт у нас в базе: каждый месячный прогон дописывает новый период.
+    """
+    for name in _penza_names(kind):
+        try:
+            content = http_bytes(ROSSTAT_BASE + name, timeout=180)
+        except requests.RequestException:
+            continue
+        # XLSX = zip («PK»): страница-заглушка Росстата тоже большая по размеру,
+        # поэтому верим подписи файла, а не длине ответа
+        if content[:2] == b"PK":
+            return content, name
+    print(f"[пенза] {kind}: ни один файл не скачался")
+    return None, None
+
+
+# --- парсеры ---------------------------------------------------------------
+
+def parse_penza_cpi(content):
+    """
+    ИПЦ субъекта: лист = месяц ('10(2026)'), строки = территории (код в колонке
+    A), колонки — ИПЦ и три группы. База «к предыдущему месяцу», годовую
+    динамику считаем сами (_yoy_from_mom), иначе на одном графике оказались бы
+    разные базы.
+    """
+    from openpyxl import load_workbook
+    codes = PENZA_TERRITORIES["cpi"]
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    out = {}
+    for sheet in wb.sheetnames:
+        ym = _sheet_month(sheet)
+        if not ym:
+            continue
+        year, month = ym
+        rows = list(wb[sheet].iter_rows(values_only=True))
+        head = next((i for i, r in enumerate(rows[:8]) if _norm(r[0]) == "код территории"), None)
+        if head is None:
+            continue
+        cols = {}
+        # подписи разнесены по двум строкам: «ИПЦ» — в строке заголовка, а
+        # «продовольственные…» — на строку ниже, в группе «в том числе»
+        for j, c in enumerate(rows[head]):
+            if _norm(c) == "ипц":
+                cols["cpi"] = j
+        for j, c in enumerate(rows[head + 1] if head + 1 < len(rows) else []):
+            t = _norm(c)
+            if t.startswith("продовольствен"):
+                cols["food"] = j
+            elif t.startswith("непродовольствен"):
+                cols["nonfood"] = j
+            elif t.startswith("услуг"):
+                cols["services"] = j
+        if not cols:
+            continue
+        for r in rows[head + 1:]:
+            geo = next((g for g, code in codes.items() if _norm(r[0]) == _norm(code)), None)
+            if not geo:
+                continue
+            period = f"{year}-{month}"
+            for what, j in cols.items():
+                v = _rub_number(r[j] if j < len(r) else None)
+                # месячный индекс физически живёт в узком коридоре; всё, что
+                # вылезло, — не индекс, а мусор или пропуск
+                if v and 90 < v < 130:
+                    out.setdefault(f"{geo}_{what}_mom", {})[period] = round(v, 2)
+    return out
+
+
+def _yoy_from_mom(series):
+    """
+    Год к году из месячных индексов: произведение 12 подряд идущих месяцев.
+    Нет хотя бы одного месяца в окне — точки нет: пересчитать г/г из девяти
+    месяцев и выдать за год было бы подтасовкой.
+    """
+    out = {}
+    for p in sorted(series):
+        y, m = int(p[:4]), int(p[5:7])
+        need = []
+        for k in range(12):
+            yy, mm = (y, m - k) if m - k > 0 else (y - 1, m - k + 12)
+            need.append(f"{yy}-{mm:02d}")
+        if all(n in series for n in need):
+            val = 1.0
+            for n in need:
+                val *= series[n] / 100.0
+            out[f"{y}-{m:02d}"] = round(val * 100, 2)
+    return out
+
+
+def parse_penza_goods(content):
+    """Средние потребительские цены: лист = месяц, строки = территории, колонки = позиции."""
+    from openpyxl import load_workbook
+    codes = PENZA_TERRITORIES["goods"]
+    wanted = set(PENZA_GOODS_BY_CODE)
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    out = {}
+    for sheet in wb.sheetnames:
+        ym = _sheet_month(sheet)
+        if not ym:
+            continue
+        year, month = ym
+        rows = list(wb[sheet].iter_rows(values_only=True))
+        head = next((i for i, r in enumerate(rows[:8]) if _norm(r[0]) == "код территории"), None)
+        if head is None:
+            continue
+        col_codes = [_norm(c) for c in rows[head]]
+        cols = {code: j for j, code in enumerate(col_codes) if code in wanted}
+        if not cols:
+            continue
+        for r in rows[head + 1:]:
+            geo = next((g for g, code in codes.items() if _norm(r[0]) == _norm(code)), None)
+            if not geo:
+                continue
+            period = f"{year}-{month}"
+            for good_code, j in cols.items():
+                v = _rub_number(r[j] if j < len(r) else None)
+                if v and v > 0:
+                    key = f"{PENZA_GEO_PREFIX[geo]}_{PENZA_GOODS_BY_CODE[good_code]['key']}"
+                    out.setdefault(key, {})[period] = round(v, 2)
+    return out
+
+
+def parse_penza_output(content):
+    """
+    Индекс выпуска товаров и услуг: лист «1» — помесячно, база «к соответствующему
+    периоду предыдущего года, %», то есть это сразу г/г. Строки «Российская
+    Федерация» в файле нет (только округа и области), поэтому сравнение — с
+    Приволжским ФО.
+    """
+    from openpyxl import load_workbook
+    names = PENZA_TERRITORIES["output"]
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    if "1" not in wb.sheetnames:
+        return {}
+    rows = list(wb["1"].iter_rows(values_only=True))
+    yrow = next((i for i, r in enumerate(rows[:6])
+                 if sum(1 for c in r if re.match(r"^20\d\d$", _norm(c))) >= 2), None)
+    if yrow is None:
+        return {}
+    starts = {j: int(_norm(c)) for j, c in enumerate(rows[yrow])
+              if re.match(r"^20\d\d$", _norm(c))}
+    # годы в шапке лежат числами, а не строками, и подпись года стоит над январём
+    # своего блока — «тянется» вправо до следующего года
+    cols = {}
+    for j, c in enumerate(rows[yrow + 1]):
+        m = MONTHS_RU.get(_norm(c))          # _norm приводит «Январь» → «январь»
+        if not m:
+            continue
+        y = max((yy for jj, yy in starts.items() if jj <= j), default=None)
+        if y:
+            cols[j] = f"{y}-{m:02d}"
+    out = {}
+    for r in rows[yrow + 2:]:
+        geo = next((g for g, n in names.items() if _norm(r[0]) == _norm(n)), None)
+        if not geo:
+            continue
+        for j, period in cols.items():
+            v = _rub_number(r[j] if j < len(r) else None)
+            if v and 50 < v < 200:
+                out.setdefault(f"{geo}_output_yoy", {})[period] = round(v, 1)
+    return out
+
+
+def parse_penza_flat(content, kind):
+    """
+    Средние цены на жильё, ₽/м². Лист «в целом по субъекту РФ» — область, лист
+    «по центру субъекта РФ» — областной центр (для нас это Пенза: в этом листе
+    строки названы областями, но цифры относятся к их центрам). Год — в шапке,
+    квартал — над группой колонок, первым в группе всегда «Все типы квартир».
+    """
+    from openpyxl import load_workbook
+    codes = PENZA_TERRITORIES["flat"]
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    quarters = {"I": 3, "II": 6, "III": 9, "IV": 12}   # квартал → месяц периода
+    out = {}
+    for sheet in wb.sheetnames:
+        if "субъект" not in sheet.lower():
+            continue
+        rows = list(wb[sheet].iter_rows(values_only=True))
+        head = next((i for i, r in enumerate(rows[:4]) if len(r) > 1 and _norm(r[1])), None)
+        ym = re.search(r"в (20\d\d) году", _norm(rows[head][1])) if head is not None else None
+        if not ym:
+            continue
+        year = ym.group(1)
+        # «по центру субъекта РФ» (центр = Пенза) против «в целом по субъекту РФ»;
+        # корень «центр» ловит и «центру», и «центре» — иначе область и город
+        # менялись значениями местами, и это было бы незаметно
+        is_center = "центр" in sheet
+        qrow = next((i for i, r in enumerate(rows[:8])
+                     if any(re.match(r"^(I|II|III|IV) квартал$", _norm(c), re.I) for c in r)), None)
+        if qrow is None:
+            continue
+        cols = {}
+        for j, c in enumerate(rows[qrow]):
+            m = re.match(r"^(i|ii|iii|iv) квартал$", _norm(c))     # _norm уже привёл к нижнему
+            if m:
+                cols[quarters[m.group(1).upper()]] = j
+        for r in rows[qrow + 1:]:
+            label = _norm(r[0])
+            code = label.split(" - ")[0] if " - " in label else label
+            if _norm(code) == _norm(codes["rf"]):
+                geo = "rf"
+            elif _norm(code) == _norm(codes["region"]):
+                geo = "city" if is_center else "region"
+            else:
+                continue
+            for month_no, j in cols.items():
+                v = _rub_number(r[j] if j < len(r) else None)
+                if v and v > 1000:
+                    out.setdefault(f"{geo}_flat_{kind}", {})[f"{year}-{month_no:02d}"] = round(v, 2)
+    return out
+
+
+def parse_penza_income(content, sheet_hint, kind):
+    """
+    Доходы по субъектам, поквартально. Строка с годами, под ней — периоды.
+    Берём только «N кв.»: «1 полугодие», «9 месяцев» и «год» — накопленные базы,
+    в один ряд с квартальными их класть нельзя.
+    """
+    from openpyxl import load_workbook
+    names = PENZA_TERRITORIES["income"]
+    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    sheet = next((s for s in wb.sheetnames if sheet_hint.lower() in s.lower()), None)
+    if not sheet:
+        return {}
+    rows = list(wb[sheet].iter_rows(values_only=True))
+    yrow = next((i for i, r in enumerate(rows[:14])
+                 if sum(1 for c in r if re.match(r"^20\d\d год", _norm(c))) >= 3), None)
+    if yrow is None or yrow + 1 >= len(rows):
+        return {}
+    years = {j: _norm(c)[:4] for j, c in enumerate(rows[yrow]) if re.match(r"^20\d\d", _norm(c))}
+    qnum = {"iкв": 1, "iiкв": 2, "iiiкв": 3, "ivкв": 4}
+    cols, last_year = {}, None
+    for j, c in enumerate(rows[yrow + 1]):
+        if j in years:
+            last_year = years[j]
+        # «I кв.» после _norm превращается в «i кв.» — точки и пробелы снимаем
+        t = _norm(c).replace(".", "").replace(" ", "")
+        if t in qnum and last_year:
+            cols[j] = f"{last_year}-{qnum[t] * 3:02d}"
+    out = {}
+    for r in rows[yrow + 2:]:
+        name = _norm(r[0])
+        geo = next((g for g, n in names.items() if name.startswith(_norm(n))), None)
+        if not geo:
+            continue
+        for j, period in cols.items():
+            v = _rub_number(r[j] if j < len(r) else None)
+            if not v or v <= 0:
+                continue
+            if kind == "sdd" and v < 1000:              # доходы — тысячи ₽ и выше
+                continue
+            if kind == "rdd" and not 50 < v < 200:      # индексы г/г
+                continue
+            out.setdefault(f"{geo}_income_{kind}", {})[period] = round(v, 2 if kind == "sdd" else 1)
+    return out
+
+
+def _sheet_month(name):
+    """'10(2026)' → ('2026', '10'); другие имена → None."""
+    m = re.match(r"^(\d{2})\((\d{4})\)$", str(name or "").strip())
+    return (m.group(2), m.group(1)) if m else None
+
+
+def set_penza_meta(**kv):
+    with _conn() as db:
+        for k, v in kv.items():
+            db.execute("INSERT OR REPLACE INTO penza_meta (key, value) VALUES (?, ?)",
+                       (k, str(v)))
+
+
+def get_penza_meta():
+    with _conn() as db:
+        return {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM penza_meta")}
+
+
+def penza_expected_keys():
+    """
+    Полный список рядов блока, когда накачано всё. Нужен не для красоты: сид
+    сравнивает с ним число ключей, чтобы «новый вид файла» не остался молча
+    пустым после деплоя. Годовые ряды инфляции в допуск не входят — им нужно
+    12 месячных точек, у свежего блока их заведомо нет.
+    """
+    keys = []
+    for geo in ("region", "pfo", "rf"):
+        keys += [f"{geo}_cpi_mom", f"{geo}_cpi_yoy", f"{geo}_food_mom",
+                 f"{geo}_nonfood_mom", f"{geo}_services_mom"]
+    keys += [f"{geo}_output_yoy" for geo in ("region", "pfo")]
+    keys += [f"{geo}_flat_{kind}" for geo in ("region", "city", "rf")
+             for kind in ("perv", "vtor")]
+    keys += [f"{geo}_income_{kind}" for geo in ("region", "rf") for kind in ("sdd", "rdd")]
+    keys += [f"{pref}_{g['key']}" for g in PENZA_GOODS for pref in PENZA_GEO_PREFIX.values()]
+    return keys
+
+
+def fetch_penza():
+    """
+    Один прогон в месяц: семь файлов → ряды в econ_series. Возвращает число
+    записанных значений. Ряды ключей pz*/pzc*/rf*/pfo* описаны на фронте через
+    PENZA_GOODS и подписи эндпоинта /api/penza.
+    """
+    series, meta = {}, {}
+    # (вид файла, парсер, уточнение: лист для доходов, вид рынка для жилья)
+    plan = [("cpi", parse_penza_cpi, None), ("output", parse_penza_output, None),
+            ("goods", parse_penza_goods, None),
+            ("flat_perv", parse_penza_flat, "perv"), ("flat_vtor", parse_penza_flat, "vtor"),
+            ("sdd", parse_penza_income, "СДД"), ("rdd", parse_penza_income, "РДД")]
+    for kind, parser, extra in plan:
+        content, name = resolve_penza_file(kind)
+        if not content:
+            continue
+        if parser is parse_penza_income:
+            got = parser(content, extra, "rdd" if kind == "rdd" else "sdd")
+        elif parser is parse_penza_flat:
+            got = parser(content, extra)
+        else:
+            got = parser(content)
+        for k, v in got.items():
+            series.setdefault(k, {}).update(v)
+        meta[f"{kind}_file"] = name
+        print(f"[пенза] {kind}: {name} → {len(got)} рядов")
+
+    # годовая инфляция из месячной — и области, и России, и ФО: одной базой,
+    # иначе линии на одном графике сравнивать нельзя
+    for geo in ("region", "rf", "pfo"):
+        mom = series.get(f"{geo}_cpi_mom")
+        if mom:
+            yoy = _yoy_from_mom(mom)
+            if yoy:
+                series[f"{geo}_cpi_yoy"] = yoy
+
+    rows = [(key, period, v) for key, s in series.items() for period, v in s.items()]
+    if not rows:
+        print("[пенза] ни одного файла не забрали — ряды не трогаем")
+        return 0
+    upsert_series(rows)
+    last = max(p for _k, p, _v in rows)
+    set_penza_meta(as_of=last, updated_at=date.today().isoformat(), **meta)
+    print(f"[пенза] записано {len(rows)} значений по {len(series)} рядам, последний период {last}")
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # Инициализация схемы и регистрация задач
 # ---------------------------------------------------------------------------
 
@@ -1380,6 +1893,13 @@ def init_econ_db():
             """)
         db.execute(
             """
+            CREATE TABLE IF NOT EXISTS penza_meta (
+                key   TEXT PRIMARY KEY,   -- asof | updated_at | cpi_file | goods_file…
+                value TEXT NOT NULL
+            )
+            """)
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS prokat_meta (
                 key   TEXT PRIMARY KEY,   -- rosstat_file | rosstat_asof | dealer_asof…
                 value TEXT NOT NULL
@@ -1447,7 +1967,26 @@ def register_jobs(scheduler):
         except Exception as e:
             print(f"[prokat/МСиБ] сбой: {e}")
 
+    def job_penza():
+        """
+        Региональные выгрузки выходят раз в месяц, а файл потребительских цен
+        весит 15–17 МБ — поэтому раз в сутки проверяем только отметку месяца, а
+        качаем один раз в месяц. Если качалось впустую (сайт молчит), отметку не
+        ставим: назавтра попробуем снова.
+        """
+        month = date.today().strftime("%Y-%m")
+        if get_penza_meta().get("checked") == month:
+            return
+        try:
+            if fetch_penza():
+                set_penza_meta(checked=month)
+        except Exception as e:
+            print(f"[пенза] сбой: {e}")
+
     scheduler.add_job(job_prokat, "interval", hours=24, id="econ_prokat")
+    # без next_run_time: первый прогон делает econ_seed, а старт в ноль
+    # означал бы повторные 17 МБ consumer-файла при каждом рестарте контейнера
+    scheduler.add_job(job_penza, "interval", hours=24, id="penza")
     scheduler.add_job(job_rates, "interval", hours=12, id="econ_rates")
     scheduler.add_job(job_real, "interval", hours=24, id="econ_real")
     # 2 часа, а не 12: снимок борта пишется только внутри сессии (охранение
@@ -1536,3 +2075,19 @@ def econ_seed():
             fetch_prokat_dealer()
         except Exception as e:
             print(f"[econ/seed] prokat/МСиБ: {e}")
+    # Пенза: сравниваем с полным списком рядов, а не «есть ли хоть что-то» —
+    # иначе добавленный позже сюжет (например, компоненты ИПЦ) остался бы пустым
+    # до следующего суточного прогона, а на фронте это выглядело бы как «нет данных»
+    with _conn() as db:
+        # префиксы рядов блока: pz_* (область и Пенза), pfo_* (округ), rf_*
+        # (Россия). «_» в LIKE — просто односимвольная маска, других рядов с
+        # такими началами в базе нет
+        pz_keys = db.execute(
+            "SELECT COUNT(DISTINCT key) FROM econ_series "
+            "WHERE key LIKE 'pz%' OR key LIKE 'pfo%' OR key LIKE 'rf%'").fetchone()[0]
+    if pz_keys < len(penza_expected_keys()) - 4:
+        try:
+            if fetch_penza():
+                set_penza_meta(checked=date.today().strftime("%Y-%m"))
+        except Exception as e:
+            print(f"[econ/seed] пенза: {e}")

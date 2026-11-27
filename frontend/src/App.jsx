@@ -16,6 +16,7 @@ import Econ from './Econ.jsx'
 import Metals from './Metals.jsx'
 import Ofz from './Ofz.jsx'
 import Prokat from './Prokat.jsx'
+import Penza from './Penza.jsx'
 import CbrForecast from './CbrForecast.jsx'
 import KeyRate from './KeyRate.jsx'
 import Inflation from './Inflation.jsx'
@@ -80,6 +81,7 @@ const TABS = [
   { id: 'econ', icon: '📈', label: 'Экономика' },
   { id: 'metals', icon: '🪙', label: 'Металлы' },
   { id: 'ofz', icon: '🧱', label: 'ОФЗ' },
+  { id: 'penza', icon: '🏞', label: 'Пензенская область' },
 ]
 
 function TabBar({ tab }) {
@@ -263,6 +265,9 @@ function RatesApp({ tab = 'fx' }) {
       {/* Доллевой рынок: кривая ОФЗ и её история */}
       {tab === 'ofz' && <Ofz />}
 
+      {/* Региональный разрез: те же федеральные выкладки, но строкой субъекта */}
+      {tab === 'penza' && <Penza />}
+
       {tab === 'fx' && (
         <>
       <p className="hint">·OTC — межбанк Yahoo, весь день; ·ЦБ — официальный курс ЦБ РФ;
@@ -364,7 +369,7 @@ function RatesApp({ tab = 'fx' }) {
 }
 
 // --- Мини-роутинг по хешу: #/<вкладка> и #/changelog ---
-// Библиотека не нужна: адресов шесть, достаточно слушать hashchange.
+// Библиотека не нужна: адресов семь, достаточно слушать hashchange.
 // Незнакомый или пустой хеш — валютная вкладка (исторически главный экран).
 
 const TAB_IDS = TABS.map((t) => t.id)

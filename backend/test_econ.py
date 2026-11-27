@@ -530,7 +530,7 @@ class TestEconSeed(unittest.TestCase):
 
     NAMES = ("fetch_ofz_history", "fetch_ofz_snapshot", "fetch_ofz_info",
              "fetch_cbr_rates", "fetch_rosstat_real", "fetch_metals",
-             "fetch_prokat", "fetch_prokat_dealer")
+             "fetch_prokat", "fetch_prokat_dealer", "fetch_penza")
 
     def tearDown(self):
         # эти тесты наполняют econ_series строками рядов; база у модуля общая,
