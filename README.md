@@ -329,6 +329,13 @@ docker compose up -d --build
 # сайт: http://<IP>:8080
 ```
 
+В production планировщик вынесен в отдельный контейнер `scheduler`.
+`backend` получает `SKIP_SCHEDULER=1` и `SKIP_SEED=1`, поэтому Gunicorn-worker'ы
+обслуживают только HTTP. Единственный процесс, который запускает APScheduler и
+стартовый seed, — `python scheduler.py`; оба сервиса используют общий volume
+`rates-data`. Увеличение числа web-worker'ов или replicas backend не умножает
+запросы к ЦБ, ММВБ, Yahoo и Росстату.
+
 Ключевые настройки бэкенда (переменные окружения контейнера):
 
 | Переменная | Что делает |
@@ -336,7 +343,7 @@ docker compose up -d --build
 | `DATABASE_FILE` | путь к SQLite (в compose — том `/data/rates.db`) |
 | `MOEX_FORCE_HTTP` | `1` — ходить в ISS по http вместо https (на VPS MOEX отдаёт цепочку с «Russian Trusted Sub CA», которой нет в стандартном доверилище, и TLS-рукопожатие падает; локально флаг не нужен) |
 | `TOP_BANKS_SECRET` | включает POST /api/top-banks (обновление рейтинга банков); без неё — 503 |
-| `SKIP_SCHEDULER` / `SKIP_SEED` | не поднимать планировщик / не лезть в сеть при старте (тесты) |
+| `SKIP_SCHEDULER` / `SKIP_SEED` | не поднимать планировщик / не лезть в сеть при старте; в production автоматически включены только для web-backend |
 
 ## API
 

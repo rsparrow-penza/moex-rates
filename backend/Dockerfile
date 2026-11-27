@@ -1,9 +1,8 @@
 # Dockerfile бэкенда moex-rates
 #
-# ВАЖНЫЙ НЮАНС именно этого проекта: внутри процесса крутится APScheduler.
-# Если запустить Flask в несколько воркеров gunicorn, каждый воркер поднимет
-# СВОЙ планировщик и будет долбить ММВБ в один час. Поэтому --workers 1:
-# фоновая задача — одна, а HTTP-нагрузка у этого сервисика копеечная.
+# APScheduler вынесен в отдельный service scheduler. Web-контейнер может
+# масштабироваться: его Gunicorn-workers только обслуживают HTTP и не
+# запускают сборщики.
 
 FROM python:3.12-slim
 
@@ -13,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 COPY app.py econ.py .
+COPY scheduler.py .
 
 # База по умолчанию лежит в /data (том примонтирует compose)
 ENV DATABASE_FILE=/data/rates.db

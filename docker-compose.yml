@@ -7,7 +7,17 @@ services:
     build: ./backend
     volumes:
       - rates-data:/data          # история курсов переживёт пересборку
+    environment:
+      SKIP_SCHEDULER: "1"
+      SKIP_SEED: "1"
     # наружу не публикуем: до API достанется только через nginx
+
+  scheduler:
+    build: ./backend
+    command: python scheduler.py
+    volumes:
+      - rates-data:/data
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
