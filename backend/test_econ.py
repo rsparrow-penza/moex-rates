@@ -748,6 +748,29 @@ class TestProkatDealer(unittest.TestCase):
         for pos in econ.PROKAT_DEALER:
             pos["label"] = before[pos["key"]]
 
+    def test_data_endpoint_posts_a_form_not_a_string(self):
+        """Регресс на настоящий баг недели: тело, залитое urlencode() в строку,
+        оставляло запрос без Content-Type: application/x-www-form-urlencoded —
+        PHP не видел assort и отвечал html-404. Выглядело это как «сайт нас
+        забанил», хотя бан был наш собственный."""
+        payload = {"title": "Арм. А500С ф10", "data": ["53750.000"] * 3}
+        before = {p_["key"]: econ.ECON_SERIES[p_["key"]]["label"] for p_ in econ.PROKAT_DEALER}
+        try:
+            with self._page_mock(), mock.patch.object(econ.requests, "post") as post:
+                post.return_value.json.return_value = payload
+                post.return_value.raise_for_status.return_value = None
+                econ.fetch_prokat_dealer(force=True)
+            first = post.call_args_list[0].kwargs                  # НЕ последний вызов
+        finally:
+            for k, label in before.items():
+                econ.ECON_SERIES[k]["label"] = label
+                next(p_ for p_ in econ.PROKAT_DEALER if p_["key"] == k)["label"] = label
+        self.assertIsInstance(first["data"], dict)                 # форма, а не строка
+        self.assertEqual(first["data"]["assort"], econ.PROKAT_DEALER[0]["assort"])
+        # X-Requested-With обязателен: без него тот же эндпоинт отдаёт 404-html
+        self.assertEqual(first["headers"]["X-Requested-With"], "XMLHttpRequest")
+        self.assertEqual(post.call_count, len(econ.PROKAT_DEALER))  # обошли все позиции
+
     def test_two_week_cadence_skips_site(self):
         """Наблюдение двухнедельное: пока оно свежее, на сайт не идём (иначе 403)."""
         econ.set_prokat_meta(dealer_asof=date.today().isoformat())

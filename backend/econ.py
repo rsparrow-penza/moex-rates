@@ -1238,8 +1238,12 @@ def fetch_prokat_dealer(force: bool = False):
             hdr = dict(MSIB_HEADERS, **{"X-Requested-With": "XMLHttpRequest",
                                          "Referer": MSIB_STAT_URL,
                                          "Accept": "application/json, text/javascript, */*; q=0.01"})
+            # тело — СЛОВАРЁМ, а не заранее залитым urlencode(): со строкой
+            # requests не ставит Content-Type: application/x-www-form-urlencoded,
+            # PHP не видит assort и отвечает 404-html — ровно так ряды и не
+            # загружались первую неделю
             r = requests.post(f"{MSIB_STAT_URL}/data?{q}", headers=hdr,
-                              data=urllib.parse.urlencode(body), timeout=40)
+                              data=body, timeout=40)
             r.raise_for_status()
             payload = r.json()
         except (requests.RequestException, ValueError) as e:
