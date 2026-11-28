@@ -339,6 +339,29 @@ docker compose up -d --build --force-recreate
 Docker-имя backend при старте, поэтому так он гарантированно получает новый
 внутренний IP после пересоздания контейнера.
 
+### Автозапуск после перезагрузки VPS
+
+Чтобы сервис поднимался сам, нужны три вещи:
+
+1. Docker включён в автозапуск: `systemctl is-enabled docker` → `enabled`.
+2. У всех трёх сервисов в `docker-compose.yml` стоит `restart: unless-stopped`
+   — это перезапуск при падении в течение работы.
+3. Установлен юнит `deploy/moex-rates.service`: он выполняет
+   `docker compose up -d --force-recreate` после старта Docker и сети. Это
+   покрывает перезагрузку VPS и случай, когда контейнеры были остановлены
+   вручную; `--force-recreate` также гарантирует, что nginx получит свежий IP
+   backend.
+
+```bash
+sudo systemctl enable --now docker
+sudo cp deploy/moex-rates.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now moex-rates.service
+```
+
+Проверка: `systemctl status moex-rates`, `docker compose ps`,
+`curl http://<IP>:8080/api/health`.
+
 Ключевые настройки бэкенда (переменные окружения контейнера):
 
 | Переменная | Что делает |

@@ -1,0 +1,27 @@
+# Установка на VPS:
+#   sudo cp deploy/moex-rates.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now moex-rates.service
+#
+# Демон Docker тоже должен быть в автозапуске:
+#   sudo systemctl enable --now docker
+#
+# restart: unless-stopped в docker-compose.yml перезапускает контейнеры при
+# падении во время работы. Этот юнит поднимает compose после перезагрузки VPS
+# (и после остановки контейнеров вручную), когда демон Docker уже стартовал.
+
+[Unit]
+Description=moex-rates (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/root/projects/moex-rates
+ExecStart=/usr/bin/docker compose up -d --force-recreate --remove-orphans
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
